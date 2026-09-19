@@ -10,7 +10,7 @@ export function installReviewShortcutGuard(enabled: () => boolean, side: () => s
 
     function editable(element: Element | null): boolean {
         return !!element?.closest(
-            "input, textarea, select, [contenteditable]:not([contenteditable=false]), [role=textbox], [role=combobox]",
+            "input, textarea, select, [contenteditable]:not([contenteditable=false]), [role=textbox], [role=combobox], [data-wr-key]",
         );
     }
 

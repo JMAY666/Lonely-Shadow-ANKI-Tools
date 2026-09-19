@@ -1,6 +1,6 @@
 # Anki 内置学习工具
 
-托盘工具 Minimize to Tray 2 0.2 与卡片手写 AnkiPenDown 1.1 同样接入主程序；入口、简体中文设置、旧配置兼容和回退见 [托盘与手写说明](docs/DESKTOP-TOOLS.md)。当前更新目标为 `dist/Anki-experience-final-26.8.1/Anki.exe`。
+托盘工具 Minimize to Tray 2 0.2 与卡片手写 AnkiPenDown 1.1 同样接入主程序；入口、简体中文设置、旧配置兼容和回退见 [托盘与手写说明](docs/DESKTOP-TOOLS.md)。当前更新目标为 `dist/Anki-weak-review-26.8.1/Anki.exe`。
 
 本工程把已修改的 SynapsePro、已接手的 FSRS Helper 和 Pass/Fail 2 直接编入同一份 Anki 26.08.1。启动后由主程序加载，无需安装 `236979321`、`759844606` 或 `876946123`，不交付独立插件包。
 

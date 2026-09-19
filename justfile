@@ -6,6 +6,21 @@ mod release
 default:
     @just --list
 
+weak-review-format:
+    & "out/pyenv/Scripts/ruff.exe" check --select I --fix qt/aqt/builtin_features/weak_review.py qt/aqt/builtin_features/weak_review_store.py qt/aqt/reviewer.py qt/tests/test_weak_review.py scripts/weak_review_smoke.py scripts/weak_review_package_check.py
+    & "out/pyenv/Scripts/ruff.exe" format qt/aqt/builtin_features/weak_review.py qt/aqt/builtin_features/weak_review_store.py qt/aqt/reviewer.py qt/tests/test_weak_review.py scripts/weak_review_smoke.py scripts/weak_review_package_check.py
+    & "node_modules/.bin/dprint.cmd" fmt qt/aqt/builtin_features/weak_review.js README.md docs/WEAK-REVIEW.md
+
+weak-review-test:
+    $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_weak_review.py qt/tests/test_review_undo.py qt/tests/test_review_shortcuts.py qt/tests/test_review_layout.py qt/tests/test_dual_review_api.py
+
+weak-review-smoke run_name:
+    $env:QT_QPA_PLATFORM="offscreen"; & "out/pyenv/Scripts/python.exe" scripts/weak_review_smoke.py {{run_name}}
+    $env:QT_QPA_PLATFORM="offscreen"; & "out/pyenv/Scripts/python.exe" scripts/weak_review_smoke.py {{run_name}} verify
+
+weak-review-package-check run_name:
+    & "out/pyenv/Scripts/python.exe" scripts/weak_review_package_check.py {{run_name}}
+
 ai-images-test:
     $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_ai_images.py
     & "out/pyenv/Scripts/python.exe" scripts/builtin_tests.py test_ai_and_removal.py

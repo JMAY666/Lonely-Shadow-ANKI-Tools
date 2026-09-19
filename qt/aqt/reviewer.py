@@ -200,6 +200,9 @@ class Reviewer:
 
         self.shortcuts = ReviewShortcutGuard(self)
         self._pending_typed_answer: object | None = None
+        from aqt.builtin_features.weak_review import WeakReview
+
+        self.weak_review = WeakReview(self)
         gui_hooks.av_player_did_end_playing.append(self._on_av_player_did_end_playing)
         gui_hooks.undo_state_did_change.append(self._update_previous_card_button)
 
@@ -476,6 +479,7 @@ class Reviewer:
         self._update_flag_icon()
         self._update_mark_icon()
         self._showAnswerButton()
+        self.weak_review.show()
         self.focus_card()
         # user hook
         gui_hooks.reviewer_did_show_question(c)
@@ -608,6 +612,7 @@ class Reviewer:
         # render and update bottom
         self.web.eval(f"_showAnswer({json.dumps(a)}, '', {self._audio_revision});")
         self._showEaseButtons()
+        self.weak_review.show()
         self.focus_card()
         # user hook
         gui_hooks.reviewer_did_show_answer(c)
@@ -681,6 +686,7 @@ class Reviewer:
         )
 
         def after_answer(changes: OpChanges) -> None:
+            self.weak_review.after_answer(answer)
             if gui_hooks.reviewer_did_answer_card.count() > 0:
                 self.card.load()
             # v3 scheduler doesn't report this
@@ -821,12 +827,22 @@ class Reviewer:
             if url == "dualReviewRefresh":
                 panel.next_card(keep=True)
                 return
-            if url in ("ans", "edit", "more", "aiScreenshot") or url.startswith(
-                ("ease", "play:", "builtinReview:")
-            ):
+            if url in (
+                "ans",
+                "edit",
+                "more",
+                "aiScreenshot",
+                "weakReviewMenu",
+            ) or url.startswith(("ease", "play:", "builtinReview:")):
                 panel.owner.activate(panel)
         from aqt.builtin_features.review_tools import command
 
+        if url == "weakReviewMenu" or url.startswith("weakReview:"):
+            if url == "weakReviewMenu":
+                self.weak_review.menu()
+            else:
+                self.weak_review.receive(url.removeprefix("weakReview:"))
+            return
         if url.startswith("reviewVisible:"):
             self._play_visible_audio(url.removeprefix("reviewVisible:"))
             return
@@ -1082,10 +1098,13 @@ class Reviewer:
 
     def _bottomHTML(self) -> str:
         from aqt.builtin_features.review_tools import render
+        from aqt.builtin_features.weak_review import button as weak_review_button
 
         if isinstance(custom := render(self, "bottom"), str):
             return custom.replace(
-                "</td>", self._screenshot_question_button() + "</td>", 1
+                "</td>",
+                self._screenshot_question_button() + weak_review_button() + "</td>",
+                1,
             )
         return """
 <center id=outer>
@@ -1094,7 +1113,7 @@ class Reviewer:
 <td align=start valign=top class=stat>
 %(previous)s
 <button title="%(editkey)s" onclick="pycmd('edit');">%(edit)s</button>
-%(screenshot)s</td>
+%(screenshot)s%(weak_review)s</td>
 <td align=center valign=top id=middle>
 </td>
 <td align=end valign=top class=stat>
@@ -1113,6 +1132,7 @@ timerStopped = false;
 """ % dict(
             previous=self._previous_card_button(),
             screenshot=self._screenshot_question_button(),
+            weak_review=weak_review_button(),
             edit=tr.studying_edit(),
             editkey=tr.actions_shortcut_key(val="E"),
             more=tr.studying_more(),
