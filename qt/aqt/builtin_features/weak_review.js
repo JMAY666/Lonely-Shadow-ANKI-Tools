@@ -18,6 +18,8 @@
     let observer = null;
     let originalImage = null;
     let imageValidated = false;
+    let inlineSource = null;
+    let inlineHost = null;
     const TYPE = "anki-weak-review-v1";
     const allowedOrigin = (origin) => origin === location.origin || origin === "https://kyxz288.com";
     const frame = () => document.querySelector("iframe#receiver");
@@ -36,6 +38,8 @@
         manifest = "";
         originalImage = null;
         imageValidated = false;
+        inlineSource = null;
+        inlineHost = null;
     }
     function style() {
         if (document.getElementById("anki-wr-style")) { return; }
@@ -94,6 +98,14 @@
             } else {
                 entry.el.innerHTML = visible ? entry.answer : entry.question;
                 entry.el.dataset.wrKnown = String(remembered && !full);
+                if (entry.inline) {
+                    entry.el.dataset.wrConcealed = String(!visible);
+                    entry.el.style.color = visible ? "#EB9D27" : "#9fc5e8";
+                    entry.el.setAttribute(
+                        "aria-label",
+                        `空格 ${entry.index + 1}：${visible ? "已显示答案" : "查看答案"}`,
+                    );
+                }
             }
             entry.button.disabled = !visible;
             entry.button.setAttribute("aria-pressed", String(remembered));
@@ -145,6 +157,179 @@
         }
         return true;
     }
+    function inlineDescription() {
+        const matches = [];
+        for (const rich of document.querySelectorAll("uni-rich-text")) {
+            // This adapter reads the inspected template's authoritative slot array.
+            // It never changes Vue state, and declines unknown component versions.
+            let component = rich.__vueParentComponent;
+            for (let depth = 0; component && depth < 12; depth++, component = component.parent) {
+                if (component.type?.name !== "mu-aarea") { continue; }
+                const answer = component.props?.card?.answer;
+                if (
+                    answer?.type === 1 && Array.isArray(answer.A)
+                    && component.props.flip === (config.side === "answer" ? 1 : 0)
+                ) {
+                    matches.push({ rich, parts: answer.A });
+                }
+                break;
+            }
+        }
+        if (matches.length !== 1) { return null; }
+        const { rich, parts } = matches[0];
+        if (
+            parts.some(part =>
+                typeof part !== "string" && !(Array.isArray(part)
+                    && part.length === 3 && typeof part[0] === "string" && typeof part[1] === "string"
+                    && [0, 1].includes(part[2]) && part[0].length + part[1].length <= 18000)
+            )
+        ) { return null; }
+        const normalized = parts.map(part => typeof part === "string" ? part : part.slice(0, 2));
+        const slots = parts.flatMap((part, index) =>
+            Array.isArray(part) ? [{ index, answer: part[0], hint: part[1], revealed: part[2] }] : []
+        );
+        if (!slots.length || slots.length > 512 || JSON.stringify(normalized).length > 100000) { return null; }
+        const identityHost = rich.closest("[cardid][card]");
+        if (!identityHost) { return null; }
+        const identity = [
+            identityHost.getAttribute("cardid"),
+            identityHost.getAttribute("card"),
+            document.querySelector(".flex-q-clz")?.innerHTML || "",
+            normalized,
+        ];
+        return { rich, parts, slots, identity, signature: JSON.stringify(identity) };
+    }
+    function inlineMarkup(parts) {
+        // The original rich-text renderer sanitizes HTML. Keep that boundary when
+        // rendering a scoped copy: only inert text formatting is supported here.
+        const template = document.createElement("template");
+        template.innerHTML = parts.map((part, index) =>
+            typeof part === "string"
+                ? part
+                : `<span data-wr-inline="${index}" class="mumu-font-14">${part[1]}</span>`
+        ).join("");
+        const allowed = new Set([
+            "P",
+            "DIV",
+            "SPAN",
+            "STRONG",
+            "B",
+            "EM",
+            "I",
+            "U",
+            "S",
+            "BR",
+            "SUB",
+            "SUP",
+            "FONT",
+            "UL",
+            "OL",
+            "LI",
+        ]);
+        const safeStyle =
+            /^(?:color|background-color|font-size|font-family|font-weight|font-style|text-decoration|text-align|line-height|white-space|margin(?:-(?:top|right|bottom|left))?|padding(?:-(?:top|right|bottom|left))?)$/;
+        for (const node of template.content.querySelectorAll("*")) {
+            if (!allowed.has(node.tagName)) { return null; }
+            for (const attr of node.attributes) {
+                if (!["style", "class", "color", "size", "face", "data-wr-inline"].includes(attr.name)) { return null; }
+            }
+            for (const property of node.style) {
+                if (
+                    !safeStyle.test(property) || /url\s*\(|expression\s*\(/i.test(node.style.getPropertyValue(property))
+                ) { return null; }
+            }
+        }
+        return template.content;
+    }
+    function discoverInline(found) {
+        if (manifest === found.signature && inlineSource === found.rich && inlineHost?.isConnected) { return; }
+        const fragment = inlineMarkup(found.parts);
+        const targets = fragment ? [...fragment.querySelectorAll("[data-wr-inline]")] : [];
+        if (
+            !fragment || targets.length !== found.slots.length
+            || targets.some((el, i) => el.dataset.wrInline !== String(found.slots[i].index))
+        ) {
+            restore();
+            notify({ kind: "unsupported" });
+            return;
+        }
+        // Validate answer markup as well as hints before any content is replaced.
+        if (found.slots.some(slot => !inlineMarkup([slot.answer]))) {
+            restore();
+            notify({ kind: "unsupported" });
+            return;
+        }
+        restore();
+        revealed.clear();
+        manifest = found.signature;
+        inlineSource = found.rich;
+        inlineHost = found.rich.cloneNode(false);
+        inlineHost.classList.add("anki-wr-inline-host");
+        const scopes = [...found.rich.attributes].filter(attr => /^data-v-/.test(attr.name));
+        for (const el of fragment.querySelectorAll("*")) {
+            for (const attr of scopes) { el.setAttribute(attr.name, attr.value); }
+        }
+        inlineHost.appendChild(fragment);
+        const display = found.rich.style.getPropertyValue("display");
+        const priority = found.rich.style.getPropertyPriority("display");
+        const host = inlineHost;
+        found.rich.style.setProperty("display", "none", "important");
+        found.rich.after(host);
+        cleanup.push(() => {
+            host.remove();
+            if (display) { found.rich.style.setProperty("display", display, priority); }
+            else { found.rich.style.removeProperty("display"); }
+        });
+        entries = targets.map((el, index) => ({
+            el,
+            index,
+            key: `s${index}`,
+            inline: true,
+            answer: found.slots[index].answer,
+            question: found.slots[index].hint,
+        }));
+        for (const entry of entries) {
+            if (found.slots[entry.index].revealed && !full) { revealed.add(entry.key); }
+            entry.el.dataset.wrKey = `blank-${entry.key}`;
+            entry.el.tabIndex = 0;
+            entry.el.setAttribute("role", "button");
+            entry.el.style.cursor = "pointer";
+            entry.el.style.padding = "0 2px";
+            const button = markButton(entry);
+            entry.el.after(button);
+            button.disabled = true;
+            const reveal = event => {
+                if (!active) { return; }
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                if (revealed.has(entry.key)) { revealed.delete(entry.key); }
+                else { revealed.add(entry.key); }
+                render();
+            };
+            listen(entry.el, "click", reveal);
+            listen(entry.el, "keydown", event => {
+                if ((event.key === " " || event.key === "Enter") && !event.repeat) { reveal(event); }
+            });
+        }
+        const next = found.rich.closest(".text-left")?.querySelector(".showanswer");
+        if (next) {
+            listen(next, "click", event => {
+                if (!active) { return; }
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                const entry = entries.find(item => !revealed.has(item.key) && (full || !known.has(item.key)));
+                if (entry) { revealed.add(entry.key); }
+                render();
+            }, true);
+        }
+        notify({
+            kind: "manifest",
+            adapter: "mumu-text-v1",
+            identity: found.identity,
+            slots: found.slots.map(slot => JSON.stringify([slot.index, slot.answer, slot.hint])),
+        });
+        observeRegions();
+    }
     function regionDescription() {
         const containers = document.querySelectorAll(".svg_answer_parent");
         if (containers.length !== 1) { return null; }
@@ -192,6 +377,16 @@
     }
     function discoverRegions() {
         if (!config?.enabled) { return; }
+        const inline = inlineDescription();
+        if (inline) {
+            discoverInline(inline);
+            return;
+        }
+        if (inlineHost) {
+            restore();
+            notify({ kind: "unsupported" });
+            return;
+        }
         const found = regionDescription();
         if (!found) { return; }
         const signature = JSON.stringify([found.slots, found.image, found.identity]);

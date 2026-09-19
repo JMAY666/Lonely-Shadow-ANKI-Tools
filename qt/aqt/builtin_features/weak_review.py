@@ -217,7 +217,7 @@ class WeakReview:
         slots = data.get("slots")
         adapter = data.get("adapter")
         if (
-            adapter not in ("mumu-svg-v1", "native-cloze-v1")
+            adapter not in ("mumu-svg-v1", "mumu-text-v1", "native-cloze-v1")
             or not isinstance(slots, list)
             or not 1 <= len(slots) <= 512
             or not all(isinstance(slot, str) and len(slot) <= 20000 for slot in slots)
@@ -247,7 +247,7 @@ class WeakReview:
             except STORAGE_ERRORS as exc:
                 self.fail(str(exc))
 
-        if adapter == "native-cloze-v1":
+        if adapter in ("native-cloze-v1", "mumu-text-v1"):
             finish()
             return
         url = data.get("image")
@@ -411,7 +411,7 @@ class WeakReview:
 
         showInfo(
             "先点遮挡查看答案，再点答案旁的 ✓ 标记本轮已记住；再次点击可加入复习。\n\n"
-            "支持标准文字挖空，以及思维导图 V3 网页中的 SVG 矩形遮挡。普通图片、"
+            "支持标准文字挖空，以及思维导图 V3 网页中的点击文字填空、SVG 矩形遮挡。普通图片、"
             "原生图片遮挡和其它自定义模板暂时保持原流程；普通图片需先用编辑器明确标注区域。\n\n"
             "重来／困难／良好／简单均仍使用原调度：评分后若处于学习或重学，保留本轮标记；"
             "毕业到正常间隔复习则结束本轮。普通复习的困难一般也会结束本轮；无重学步骤时重来也可能直接结束。"

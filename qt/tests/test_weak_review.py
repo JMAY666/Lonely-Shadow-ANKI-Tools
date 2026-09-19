@@ -183,3 +183,26 @@ def test_all_marked_only_prompts_for_normal_rating(tmp_path, monkeypatch):
     prompt.assert_called_once()
     assert "正常评分" in prompt.call_args.args[0]
     assert controller.store.load(1, "s", "n", "m")["known"] == ["s0"]
+
+
+def test_custom_text_manifest_restores_individual_marks_without_image_fetch(tmp_path):
+    controller = WeakReview.__new__(WeakReview)
+    controller.mw = SimpleNamespace(
+        pm=SimpleNamespace(profileFolder=lambda: str(tmp_path))
+    )
+    controller.card_id, controller.schedule, controller.source = 1, "s", "n"
+    controller.token, controller.pending_manifest = "t", ""
+    controller.current = Mock(return_value=True)
+    controller.publish = Mock()
+    manifest = {
+        "adapter": "mumu-text-v1",
+        "slots": ['[1,"same","hint"]', '[3,"same","hint"]'],
+        "identity": ["question", "version 1"],
+    }
+    controller.accept_manifest(manifest)
+    controller.change(["s1"])
+    controller.pending_manifest = ""
+    controller.accept_manifest(manifest)
+    assert controller.value["known"] == ["s1"]
+    controller.accept_manifest(manifest | {"identity": ["question", "version 2"]})
+    assert controller.value["known"] == []

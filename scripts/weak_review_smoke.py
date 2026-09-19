@@ -130,6 +130,29 @@ def frame_html():
 <script>document.querySelectorAll('.svg_mask').forEach(el=>{{if(location.search.includes('answer'))el.className='svg_mask_show';el.onclick=()=>el.classList.toggle('svg_mask_show')}});</script></body></html>'''
 
 
+def text_frame_html():
+    # Synthetic form of the inspected component contract, never personal material.
+    parts = ["<p>合成标题：<strong style='color:red'>重复答案</strong></p>"]
+    for index in range(9):
+        parts[-1] += f"<p>条目 {index + 1}："
+        parts.extend(
+            [["相同答案" if index % 2 == 0 else "另一答案", "(填空)", 0], "</p>"]
+        )
+    return """<html><style>body{font:18px sans-serif}p{margin:4px 0}uni-rich-text{display:block}</style>
+<body><div cardid="synthetic-text" card="text"><div class="flex-q-clz">合成文字卡</div><div class="text-left"><div><uni-rich-text class="mumu-font-14" data-v-synthetic></uni-rich-text></div><div class="showanswer">点击逐空查看答案</div></div></div>
+<script>
+window.testParts=PARTS;
+const rich=document.querySelector('uni-rich-text');
+const answerSide=location.search.includes('answer');
+window.testComponent={type:{name:'mu-aarea'},props:{flip:answerSide?1:0,card:{answer:{type:1,A:testParts}}},parent:null};
+rich.__vueParentComponent={type:{name:'uni-rich-text'},parent:testComponent};
+window.renderNative=()=>{rich.innerHTML='<div>'+testParts.map((p,i)=>typeof p==='string'?p:answerSide?'<span style="color:#EB9D27">'+p[0]+'</span>':'<a href="blankIndex:'+i+'">'+(p[2]?p[0]:p[1])+'</a>').join('')+'</div>'};
+rich.addEventListener('click',e=>{const a=e.target.closest('a');if(a){e.preventDefault();const i=Number(a.getAttribute('href').split(':')[1]);testParts[i][2]=1-testParts[i][2];renderNative()}});
+document.querySelector('.showanswer').onclick=()=>{const p=testParts.find(p=>Array.isArray(p)&&!p[2]);if(p)p[2]=1;renderNative()};
+renderNative();
+</script></body></html>""".replace("PARTS", json.dumps(parts, ensure_ascii=False))
+
+
 try:
     from anki.collection import Collection
     from anki.lang import set_lang
@@ -156,6 +179,7 @@ try:
         col = Collection(str(profile / "collection.anki2"))
         deck = col.decks.id("逐空合成测试")
         image_deck = col.decks.id("图片区域合成测试")
+        text_deck = col.decks.id("网页文字填空合成测试")
         note = col.new_note(col.models.by_name("Cloze"))
         note["Text"] = (
             "<table style='margin:auto'><tr><th>来源</th><th>答案</th></tr>"
@@ -167,7 +191,11 @@ try:
         )
         col.add_note(note, deck)
         native_id = note.cards()[0].id
-        image_note = col.new_note(col.models.by_name("Basic"))
+        web_model = col.models.by_name("Basic")
+        # The real custom template has one iframe per face, without FrontSide.
+        web_model["tmpls"][0]["afmt"] = "{{Back}}"
+        col.models.update_dict(web_model)
+        image_note = col.new_note(web_model)
         image_note["Front"] = (
             '<iframe id="receiver" src="/_anki/weak-review-synthetic?question" style="width:100%;height:480px;border:0"></iframe>'
         )
@@ -175,12 +203,25 @@ try:
             '<iframe id="receiver" src="/_anki/weak-review-synthetic?answer" style="width:100%;height:480px;border:0"></iframe>'
         )
         col.add_note(image_note, image_deck)
+        text_note = col.new_note(col.models.by_name("Basic"))
+        text_note["Front"] = (
+            '<iframe id="receiver" src="/_anki/weak-review-text-synthetic?question" style="width:100%;height:480px;border:0"></iframe>'
+        )
+        text_note["Back"] = (
+            '<iframe id="receiver" src="/_anki/weak-review-text-synthetic?answer" style="width:100%;height:480px;border:0"></iframe>'
+        )
+        col.add_note(text_note, text_deck)
         (Path(col.media.dir()) / "_recall_test.html").write_text(
             frame_html(), encoding="utf8"
         )
         col.decks.select(deck)
         col.close()
-        expected = {"deck": deck, "image_deck": image_deck, "native_id": native_id}
+        expected = {
+            "deck": deck,
+            "image_deck": image_deck,
+            "native_id": native_id,
+            "text_deck": text_deck,
+        }
         (BASE / "expected.json").write_text(json.dumps(expected))
     else:
         expected = json.loads((BASE / "expected.json").read_text())
@@ -203,6 +244,11 @@ try:
     feature.image_snapshot = synthetic_image_snapshot
     mediasrv.app.add_url_rule(
         "/_anki/weak-review-synthetic", "weak_review_synthetic", frame_html
+    )
+    mediasrv.app.add_url_rule(
+        "/_anki/weak-review-text-synthetic",
+        "weak_review_text_synthetic",
+        text_frame_html,
     )
     app = aqt._run(
         ["anki", "-b", str(BASE), "-p", "Recall-Test", "--safemode", "-l", "zh_CN"],
@@ -437,6 +483,119 @@ try:
             ),
         )
         mw.grab().save(str(BASE / "dual.png"))
+        right.deck.setCurrentIndex(right.deck.findData(expected["text_deck"]))
+        wait(lambda: not right.pending and ready(image_reviewer))
+
+        def text_hidden():
+            return frame_js(
+                "document.querySelectorAll('.anki-wr-inline-host [data-wr-concealed=true]').length"
+            )
+
+        wait(lambda: text_hidden() == 9)
+        before_text_marks = snapshot()
+        check(
+            "nine custom text slots detected",
+            len(image_reviewer.weak_review.slots) == 9,
+        )
+        frame_js("document.querySelector('[data-wr-inline]').click()")
+        wait(lambda: text_hidden() == 8)
+        check(
+            "custom text reveal does not mark",
+            image_reviewer.weak_review.value["known"] == [],
+        )
+        frame_js("document.querySelector('[data-wr-key=s0]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s0"])
+        show_question(image_reviewer)
+        wait(lambda: text_hidden() == 8)
+        check(
+            "equal text in different slots remains independently hidden",
+            frame_js(
+                "document.querySelector('[data-wr-inline=\"5\"]').dataset.wrConcealed==='true'"
+            ),
+        )
+        image_reviewer._showAnswer()
+        wait(lambda: ready(image_reviewer) and text_hidden() == 0)
+        frame_js("document.querySelector('[data-wr-key=s2]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s0", "s2"])
+        show_question(image_reviewer)
+        wait(lambda: text_hidden() == 7)
+        check(
+            "custom text marks survive flipping and preserve formatting",
+            frame_js(
+                "document.querySelector('.anki-wr-inline-host strong').style.color==='red' && document.querySelectorAll('.anki-wr-inline-host p').length===10"
+            ),
+        )
+        image_reviewer.weak_review.toggle_full(True)
+        wait(lambda: text_hidden() == 9)
+        image_reviewer.weak_review.toggle_full(False)
+        wait(lambda: text_hidden() == 7)
+        frame_js("document.querySelector('[data-wr-key=s0]').click()")
+        wait(lambda: text_hidden() == 8)
+        check(
+            "custom remembered slot can rejoin review without changing equal answer",
+            image_reviewer.weak_review.value["known"] == ["s2"],
+        )
+        image_reviewer.weak_review.undo_mark()
+        wait(lambda: text_hidden() == 7)
+        check(
+            "custom text operations never grade or reschedule",
+            snapshot() == before_text_marks,
+        )
+        image_reviewer.weak_review.toggle(False)
+        wait(
+            lambda: frame_js(
+                "document.querySelectorAll('.anki-wr-inline-host').length===0"
+            )
+        )
+        frame_js("document.querySelector('a[href=\"blankIndex:1\"]').click()")
+        check(
+            "disabling restores original interactive text renderer",
+            frame_js(
+                "testParts[1][2]===1 && document.querySelector('uni-rich-text').style.display!== 'none'"
+            ),
+        )
+        image_reviewer.weak_review.toggle(True)
+        wait(lambda: ready(image_reviewer) and text_hidden() == 7)
+        frame_js(
+            "testParts[0]=testParts[0].replace('合成标题','新标题');renderNative()"
+        )
+        wait(
+            lambda: (
+                ready(image_reviewer)
+                and image_reviewer.weak_review.value["known"] == []
+            )
+        )
+        check(
+            "remote text edits invalidate saved marks",
+            frame_js(
+                "document.querySelector('.anki-wr-inline-host').textContent.includes('新标题')"
+            ),
+        )
+        frame_js("testParts[1][0]='<code>不支持的格式</code>';renderNative()")
+        wait(lambda: "空格或图片" in image_reviewer.weak_review.status)
+        check(
+            "unknown inline markup safely restores original content",
+            frame_js(
+                "!document.querySelector('.anki-wr-inline-host') && document.querySelector('uni-rich-text').style.display!== 'none'"
+            ),
+        )
+        show_question(image_reviewer)
+        wait(lambda: text_hidden() == 7)
+        image_reviewer._showAnswer()
+        wait(lambda: ready(image_reviewer) and text_hidden() == 0)
+        image_reviewer._answerCard(1)
+        wait(
+            lambda: (
+                ready(image_reviewer)
+                and image_reviewer.state == "question"
+                and text_hidden() == 7
+            )
+        )
+        check(
+            "custom text marks carry through actual relearning step",
+            mw.col.db.scalar("select count(*) from revlog")
+            == len(before_text_marks[1]) + 1,
+        )
         owner.toggle()
         wait(lambda: not owner.enabled)
         mw.moveToState("deckBrowser")
@@ -481,6 +640,23 @@ try:
         check(
             "undo graduation recovers the unfinished round",
             len(value["known"]) == 4,
+        )
+        mw.moveToState("deckBrowser")
+        mw.col.decks.select(expected["text_deck"])
+        mw.moveToState("review")
+        wait(lambda: ready(reviewer))
+        wait(
+            lambda: (
+                js(
+                    reviewer.web,
+                    "document.querySelector('#receiver').contentDocument.querySelectorAll('[data-wr-concealed=true]').length",
+                )
+                == 7
+            )
+        )
+        check(
+            "fresh process restores custom text marks",
+            reviewer.weak_review.value["known"] == ["s0", "s2"],
         )
 
     mw.dual_review.stop()

@@ -17,7 +17,11 @@ for mode in ("write", "verify"):
     assert json.loads((base / f"results-{mode}.json").read_text(encoding="utf8"))[
         "passed"
     ]
-package = ROOT / "dist/Anki-weak-review-26.8.1"
+package = Path(
+    os.environ.get(
+        "ANKI_BUILTIN_PACKAGE_ROOT", str(ROOT / "dist/Anki-weak-review-text-26.8.1")
+    )
+).resolve()
 assert "weak_review" in json.loads(
     (package / "INTEGRATED-BUILD.json").read_text(encoding="utf8")
 )
