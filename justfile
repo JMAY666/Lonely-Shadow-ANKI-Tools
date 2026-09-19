@@ -7,8 +7,8 @@ default:
     @just --list
 
 weak-review-format:
-    & "out/pyenv/Scripts/ruff.exe" check --select I --fix qt/aqt/builtin_features/weak_review.py qt/aqt/builtin_features/weak_review_store.py qt/aqt/reviewer.py qt/tests/test_weak_review.py scripts/weak_review_smoke.py scripts/weak_review_package_check.py
-    & "out/pyenv/Scripts/ruff.exe" format qt/aqt/builtin_features/weak_review.py qt/aqt/builtin_features/weak_review_store.py qt/aqt/reviewer.py qt/tests/test_weak_review.py scripts/weak_review_smoke.py scripts/weak_review_package_check.py
+    & "out/pyenv/Scripts/ruff.exe" check --select I --fix qt/aqt/builtin_features/weak_review.py qt/aqt/builtin_features/weak_review_store.py qt/aqt/reviewer.py qt/tests/test_weak_review.py scripts/weak_review_smoke.py scripts/weak_review_package_check.py scripts/weak_review_fixtures.py
+    & "out/pyenv/Scripts/ruff.exe" format qt/aqt/builtin_features/weak_review.py qt/aqt/builtin_features/weak_review_store.py qt/aqt/reviewer.py qt/tests/test_weak_review.py scripts/weak_review_smoke.py scripts/weak_review_package_check.py scripts/weak_review_fixtures.py
     & "node_modules/.bin/dprint.cmd" fmt qt/aqt/builtin_features/weak_review.js README.md docs/WEAK-REVIEW.md
 
 weak-review-test:

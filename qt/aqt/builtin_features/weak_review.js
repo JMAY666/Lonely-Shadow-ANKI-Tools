@@ -20,11 +20,19 @@
     let imageValidated = false;
     let inlineSource = null;
     let inlineHost = null;
+    let localBinding = null;
+    let currentRequest = null;
+    let requestSequence = 0;
+    const requestPrefix = Math.random().toString(36).slice(2);
     const TYPE = "anki-weak-review-v1";
     const allowedOrigin = (origin) => origin === location.origin || origin === "https://kyxz288.com";
     const frame = () => document.querySelector("iframe#receiver");
     const notify = (payload) => {
         const data = { ...payload, token: config?.token };
+        if (data.kind === "manifest" && data.request === undefined) {
+            currentRequest = `${requestPrefix}:${++requestSequence}`;
+        }
+        if (data.request === undefined) { data.request = currentRequest; }
         if (child) { window.parent.postMessage({ type: TYPE, command: data }, "*"); }
         else if (typeof window.pycmd === "function") { window.pycmd("weakReview:" + JSON.stringify(data)); }
     };
@@ -40,6 +48,8 @@
         imageValidated = false;
         inlineSource = null;
         inlineHost = null;
+        localBinding = null;
+        currentRequest = null;
     }
     function style() {
         if (document.getElementById("anki-wr-style")) { return; }
@@ -92,7 +102,11 @@
         for (const entry of entries) {
             const remembered = known.has(entry.key);
             const visible = config.side === "answer" || (!full && remembered) || revealed.has(entry.key);
-            if (entry.region) {
+            if (entry.local) {
+                entry.local.paint(entry.el, visible);
+                entry.el.dataset.wrConcealed = String(!visible);
+                entry.el.dataset.wrKnown = String(remembered && !full);
+            } else if (entry.region) {
                 entry.el.dataset.wrHidden = String(!visible);
                 entry.el.dataset.wrKnown = String(remembered && !full);
             } else {
@@ -114,6 +128,7 @@
         }
     }
     function activateNative() {
+        if (document.querySelector("#qa #enhanced-cloze-content, #qa .answers span.aswk")) { return false; }
         const question = new DOMParser().parseFromString(config.question, "text/html");
         const source = [...question.querySelectorAll("span.cloze[data-cloze]")];
         const targets = [...document.querySelectorAll("#qa span.cloze[data-ordinal]")];
@@ -156,6 +171,191 @@
             });
         }
         return true;
+    }
+    function localTextIsReady(html) {
+        return typeof html === "string" && html.length <= 18000
+            && !/≯#|#≮|<(?:img|svg|script|iframe|audio|video|canvas|input)\b|\\[([]/.test(html);
+    }
+    function studioDescription() {
+        const qa = document.getElementById("qa");
+        if (!qa?.querySelector(".answers .content")) { return null; }
+        const source = new DOMParser().parseFromString(config.question, "text/html");
+        const original = source.querySelector("template#ak-front")?.content || source;
+        if (!original.querySelector("#showButton")) { return null; }
+        const declared = [...original.querySelectorAll(".answers .content span.aswk")];
+        const targets = [...qa.querySelectorAll(".answers .content span.aswk")];
+        if (qa.querySelector(".answers .content img, .answers .content svg, .answers .content iframe")) { return null; }
+        if (
+            !targets.length || declared.length !== targets.length
+            || targets.some((el, i) =>
+                !localTextIsReady(el.innerHTML) || el.querySelector(".aswk")
+                || el.innerHTML !== declared[i].innerHTML
+            )
+        ) { return null; }
+        const methods = ["replaceAndScroll", "resetButton", "restoreAndScroll"];
+        if (config.side === "question" && methods.some(name => typeof window[name] !== "function")) { return null; }
+        return {
+            adapter: "aswk-v1",
+            targets,
+            slots: declared.map((el, i) => JSON.stringify([i, el.innerHTML])),
+            identity: "aswk-current-content",
+            methods,
+            shown: el => el.classList.contains("show"),
+            paint: (el, visible) => el.classList.toggle("show", visible),
+        };
+    }
+    function enhancedDescription() {
+        const root = document.querySelector("#qa #enhanced-clozes");
+        const content = document.querySelector("#qa #enhanced-cloze-content");
+        const data = window.enhancedClozesData;
+        if (!root || !content || !data || typeof window.toggleCloze !== "function") { return null; }
+        if (
+            content.querySelector("img, svg, iframe, audio, video, canvas") || /\\[([]/.test(content.innerHTML)
+        ) { return null; }
+        const parsed = [...content.innerHTML.matchAll(/\{\{c(\d+)::([\s\S]*?)(?:::([\s\S]*?))?\}\}/g)]
+            .map(match => [match[1], match[2], match[3] || ""]);
+        if (
+            !parsed.length || parsed.length > 2048
+            || !["clozeId", "answers", "hints"].every(key =>
+                Array.isArray(data[key]) && data[key].length === parsed.length
+            )
+        ) { return null; }
+        if (
+            parsed.some((part, i) =>
+                part[0] !== String(data.clozeId[i])
+                || part[1] !== data.answers[i] || part[2] !== data.hints[i]
+                || !localTextIsReady(part[1]) || !localTextIsReady(part[2])
+            )
+        ) { return null; }
+        const expected = parsed.flatMap((part, i) => Number(part[0]) === config.ordinal ? [i] : []);
+        const targets = [...root.querySelectorAll("span.genuine-cloze[index][cid]")];
+        if (
+            !targets.length || targets.length !== expected.length
+            || targets.some((el, i) =>
+                el.getAttribute("index") !== String(expected[i]) || Number(el.getAttribute("cid")) !== config.ordinal
+            )
+        ) { return null; }
+        const toggle = localBinding?.wrappedToggle === window.toggleCloze
+            ? localBinding.nativeToggle
+            : window.toggleCloze;
+        return {
+            adapter: "enhanced-cloze-v1",
+            targets,
+            toggle,
+            slots: expected.map(index => JSON.stringify([index, ...parsed[index]])),
+            identity: [config.ordinal, parsed, content.innerHTML],
+            shown: el => el.getAttribute("show-state") === "answer",
+            paint: (el, visible) => {
+                const side = visible ? "answer" : "hint";
+                if (el.getAttribute("show-state") !== side) { toggle(el, side); }
+            },
+        };
+    }
+    function replaceLocalMethod(name, replacement) {
+        const original = window[name];
+        if (typeof original !== "function") { return; }
+        window[name] = replacement;
+        cleanup.push(() => {
+            if (window[name] === replacement) { window[name] = original; }
+        });
+    }
+    function bindLocalTemplate(found) {
+        const signature = JSON.stringify([found.adapter, found.slots, found.identity]);
+        if (localBinding?.signature === signature && found.targets.every((el, i) => entries[i]?.el === el)) { return; }
+        restore();
+        revealed.clear();
+        localBinding = { signature };
+        entries = found.targets.map((el, index) => ({ el, index, key: `s${index}`, local: found }));
+        for (const entry of entries) {
+            const shown = found.shown(entry.el);
+            if (shown && config.side === "question" && !full) { revealed.add(entry.key); }
+            const button = markButton(entry);
+            button.disabled = true;
+            entry.el.after(button);
+            cleanup.push(() => {
+                found.paint(entry.el, shown);
+                delete entry.el.dataset.wrConcealed;
+                delete entry.el.dataset.wrKnown;
+            });
+            if (found.adapter === "aswk-v1") {
+                listen(entry.el, "click", event => {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    if (revealed.has(entry.key)) { revealed.delete(entry.key); }
+                    else { revealed.add(entry.key); }
+                    render();
+                }, true);
+            }
+        }
+        if (found.adapter === "aswk-v1") {
+            const next = () => {
+                const entry = entries.find(item => !revealed.has(item.key) && (full || !known.has(item.key)));
+                if (entry) { revealed.add(entry.key); }
+                render();
+            };
+            const hide = () => {
+                const last = [...entries].reverse().find(item => revealed.has(item.key));
+                if (last) { revealed.delete(last.key); }
+                render();
+            };
+            const reset = () => {
+                revealed.clear();
+                render();
+            };
+            for (
+                const [name, action] of [
+                    ["replaceAndScroll", next],
+                    ["resetButton", reset],
+                    ["restoreAndScroll", hide],
+                    ["userJs1", next],
+                    ["userJs2", reset],
+                    ["userJs3", hide],
+                ]
+            ) { replaceLocalMethod(name, action); }
+        } else {
+            const wrapped = function(element, option) {
+                const target = element?.closest?.(".genuine-cloze") || element;
+                const entry = entries.find(item => item.el === target);
+                if (!entry) { return found.toggle.apply(this, arguments); }
+                if (option === "answer" || (option === "toggle" && !found.shown(target))) { revealed.add(entry.key); }
+                else if (option === "hint" || option === "toggle") { revealed.delete(entry.key); }
+                render();
+            };
+            localBinding.nativeToggle = found.toggle;
+            localBinding.wrappedToggle = wrapped;
+            replaceLocalMethod("toggleCloze", wrapped);
+        }
+        notify({ kind: "manifest", adapter: found.adapter, slots: found.slots, identity: found.identity });
+        observeLocal();
+    }
+    function discoverLocal() {
+        if (!config?.enabled || activeFrame) { return false; }
+        const found = enhancedDescription() || studioDescription();
+        if (found) {
+            bindLocalTemplate(found);
+            return true;
+        }
+        if (localBinding) {
+            restore();
+            notify({ kind: "unsupported" });
+        }
+        return false;
+    }
+    function observeLocal() {
+        observer = new MutationObserver(() => {
+            if (queued) { return; }
+            queued = true;
+            requestAnimationFrame(() => {
+                queued = false;
+                discoverLocal();
+            });
+        });
+        observer.observe(document.getElementById("qa") || document.body, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ["class", "show-state"],
+        });
     }
     function inlineDescription() {
         const matches = [];
@@ -476,7 +676,9 @@
             if (remote) { sendConfig(remote.contentWindow); }
             else if (value.enabled) {
                 style();
-                if (!activateNative()) { notify({ kind: "unsupported" }); }
+                // Protected templates may decrypt/render after Anki's update hook.
+                // Observe their actual supported structure instead of ending detection early.
+                if (!discoverLocal() && !activateNative()) { observeLocal(); }
             }
         }
     }
@@ -499,6 +701,7 @@
             activeFrame.postMessage({ type: TYPE, state: value }, "*");
             return;
         }
+        if (value.request !== currentRequest) { return; }
         if (full !== value.full) { revealed.clear(); }
         // Rejoining a remembered slot immediately masks it again on the question.
         for (const key of known) { if (!value.known.includes(key)) { revealed.delete(key); } }
@@ -511,7 +714,7 @@
                 probe.onerror = () => resolve(false);
                 probe.src = value.image;
             });
-            if (value.token !== config?.token || !originalImage) { return; }
+            if (value.token !== config?.token || value.request !== currentRequest || !originalImage) { return; }
             if (!loaded) {
                 notify({ kind: "unsupported" });
                 restore();

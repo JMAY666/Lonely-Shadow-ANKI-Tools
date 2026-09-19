@@ -109,6 +109,7 @@ class WeakReview:
         self.status = "正在识别可独立作答的空格"
         self.asset_cache: dict[str, tuple[str, str]] = {}
         self.pending_manifest = ""
+        self.request: str | None = None
         script = QWebEngineScript()
         script.setName("anki-weak-review")
         script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentReady)
@@ -149,6 +150,7 @@ class WeakReview:
         self.slots = []
         self.value = {"known": [], "history": []}
         self.pending_manifest = ""
+        self.request = None
         self.status = "此卡未识别到支持的空格，保持原复习方式"
         config = {
             "token": self.token,
@@ -156,6 +158,7 @@ class WeakReview:
             "enabled": self.enabled and not card.odid,
             "full": self.full,
             "question": card.question(),
+            "ordinal": card.ord + 1,
         }
         if card.odid:
             self.status = "筛选牌组暂不启用逐空标记"
@@ -196,6 +199,8 @@ class WeakReview:
             if kind == "manifest":
                 self.accept_manifest(data)
             elif kind == "mark":
+                if data.get("request") != self.request:
+                    return
                 if panel := self.reviewer.review_panel():
                     panel.owner.activate(panel)
                 if not self.current(self.token, action=True):
@@ -217,7 +222,14 @@ class WeakReview:
         slots = data.get("slots")
         adapter = data.get("adapter")
         if (
-            adapter not in ("mumu-svg-v1", "mumu-text-v1", "native-cloze-v1")
+            adapter
+            not in (
+                "mumu-svg-v1",
+                "mumu-text-v1",
+                "native-cloze-v1",
+                "aswk-v1",
+                "enhanced-cloze-v1",
+            )
             or not isinstance(slots, list)
             or not 1 <= len(slots) <= 512
             or not all(isinstance(slot, str) and len(slot) <= 20000 for slot in slots)
@@ -227,6 +239,7 @@ class WeakReview:
         if pending == self.pending_manifest:
             return
         self.pending_manifest = pending
+        self.request = data.get("request")
         token = self.token
 
         def finish(asset: tuple[str, str] | None = None) -> None:
@@ -247,7 +260,7 @@ class WeakReview:
             except STORAGE_ERRORS as exc:
                 self.fail(str(exc))
 
-        if adapter in ("native-cloze-v1", "mumu-text-v1"):
+        if adapter != "mumu-svg-v1":
             finish()
             return
         url = data.get("image")
@@ -300,6 +313,7 @@ class WeakReview:
             "known": self.value["known"],
             "full": self.full,
             "image": image,
+            "request": self.request,
         }
         self.reviewer.web.eval(f"window.ankiWeakReview?.apply({json.dumps(payload)});")
         self.status = f"本轮已记住 {len(self.value['known'])}/{len(self.slots)}；查看答案不等于记住"
@@ -411,7 +425,8 @@ class WeakReview:
 
         showInfo(
             "先点遮挡查看答案，再点答案旁的 ✓ 标记本轮已记住；再次点击可加入复习。\n\n"
-            "支持标准文字挖空，以及思维导图 V3 网页中的点击文字填空、SVG 矩形遮挡。普通图片、"
+            "支持标准文字挖空、Anki Studio 灰色遮挡、Enhanced Cloze 当前编号的填空，"
+            "以及思维导图 V3 网页中的点击文字填空、SVG 矩形遮挡。普通图片、"
             "原生图片遮挡和其它自定义模板暂时保持原流程；普通图片需先用编辑器明确标注区域。\n\n"
             "重来／困难／良好／简单均仍使用原调度：评分后若处于学习或重学，保留本轮标记；"
             "毕业到正常间隔复习则结束本轮。普通复习的困难一般也会结束本轮；无重学步骤时重来也可能直接结束。"

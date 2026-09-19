@@ -9,6 +9,8 @@ import time
 import traceback
 from pathlib import Path
 
+from weak_review_fixtures import enhanced_html, studio_html
+
 ROOT = Path(__file__).resolve().parents[1]
 if package := os.environ.get("ANKI_BUILTIN_PACKAGE_ROOT"):
     sys.path.insert(0, str(Path(package) / "app_packages"))
@@ -180,6 +182,8 @@ try:
         deck = col.decks.id("逐空合成测试")
         image_deck = col.decks.id("图片区域合成测试")
         text_deck = col.decks.id("网页文字填空合成测试")
+        studio_deck = col.decks.id("灰色遮挡合成测试")
+        enhanced_deck = col.decks.id("增强挖空合成测试")
         note = col.new_note(col.models.by_name("Cloze"))
         note["Text"] = (
             "<table style='margin:auto'><tr><th>来源</th><th>答案</th></tr>"
@@ -211,6 +215,13 @@ try:
             '<iframe id="receiver" src="/_anki/weak-review-text-synthetic?answer" style="width:100%;height:480px;border:0"></iframe>'
         )
         col.add_note(text_note, text_deck)
+        for target_deck, render in (
+            (studio_deck, studio_html),
+            (enhanced_deck, enhanced_html),
+        ):
+            local_note = col.new_note(web_model)
+            local_note["Front"], local_note["Back"] = render(), render(True)
+            col.add_note(local_note, target_deck)
         (Path(col.media.dir()) / "_recall_test.html").write_text(
             frame_html(), encoding="utf8"
         )
@@ -221,6 +232,8 @@ try:
             "image_deck": image_deck,
             "native_id": native_id,
             "text_deck": text_deck,
+            "studio_deck": studio_deck,
+            "enhanced_deck": enhanced_deck,
         }
         (BASE / "expected.json").write_text(json.dumps(expected))
     else:
@@ -596,6 +609,124 @@ try:
             mw.col.db.scalar("select count(*) from revlog")
             == len(before_text_marks[1]) + 1,
         )
+        for kind, target_deck, count in [
+            ("studio", expected["studio_deck"], 6),
+            ("enhanced", expected["enhanced_deck"], 7),
+        ]:
+            right.deck.setCurrentIndex(right.deck.findData(target_deck))
+            wait(lambda: not right.pending and ready(image_reviewer))
+            local = image_reviewer
+            selector = ".aswk" if kind == "studio" else ".genuine-cloze"
+
+            def local_hidden():
+                return js(
+                    local.web,
+                    "document.querySelectorAll('[data-wr-concealed=true]').length",
+                )
+
+            wait(lambda: local_hidden() == count)
+            baseline = snapshot()
+            check(
+                kind + " asynchronous template detects only target slots",
+                len(local.weak_review.slots) == count
+                and js(local.web, "document.querySelectorAll('.anki-wr-mark').length")
+                == count,
+            )
+            js(local.web, f"document.querySelector('{selector}').click()")
+            wait(lambda: local_hidden() == count - 1)
+            check(
+                kind + " native reveal never marks",
+                local.weak_review.value["known"] == [],
+            )
+            mark(local, 0)
+            show_question(local)
+            wait(lambda: local_hidden() == count - 1)
+            check(
+                kind + " remembered answer remains visible",
+                local.weak_review.value["known"] == ["s0"],
+            )
+            if kind == "studio":
+                js(local.web, "document.getElementById('showButton').click()")
+                wait(lambda: local_hidden() == count - 2)
+                js(local.web, "document.getElementById('resetButton').click()")
+                wait(lambda: local_hidden() == count - 1)
+                check(
+                    "studio reveal/reset preserves mark and ordinary formatting",
+                    js(
+                        local.web,
+                        "document.querySelector('.content>b').textContent==='普通加粗' && document.querySelectorAll('u').length===1",
+                    ),
+                )
+            else:
+                js(local.web, "showTestCloze()")
+                wait(lambda: local_hidden() == count - 2)
+                check(
+                    "enhanced pseudo-clozes retain original behavior",
+                    js(
+                        local.web,
+                        "document.querySelectorAll('.pseudo-cloze[show-state=answer]').length===2 && !document.querySelector('.pseudo-cloze[data-wr-known]')",
+                    ),
+                )
+                js(local.web, "rebuildTestClozes()")
+                wait(lambda: ready(local) and local_hidden() == count - 1)
+                check(
+                    "enhanced DOM rebuild retains individual identity without wrapper recursion",
+                    local.weak_review.value["known"] == ["s0"],
+                )
+            show_answer(local)
+            wait(lambda: local_hidden() == 0)
+            mark(local, 2)
+            show_question(local)
+            wait(lambda: local_hidden() == count - 2)
+            local.weak_review.toggle_full(True)
+            wait(lambda: local_hidden() == count)
+            local.weak_review.toggle_full(False)
+            wait(lambda: local_hidden() == count - 2)
+            mark(local, 0)
+            wait(lambda: local_hidden() == count - 1)
+            local.weak_review.undo_mark()
+            wait(lambda: local_hidden() == count - 2)
+            check(
+                kind + " equal answers, flip, full test and mark undo stay independent",
+                local.weak_review.value["known"] == ["s0", "s2"],
+            )
+            check(kind + " local actions do not reschedule", snapshot() == baseline)
+            local.weak_review.toggle(False)
+            wait(
+                lambda: (
+                    js(local.web, "document.querySelectorAll('.anki-wr-mark').length")
+                    == 0
+                )
+            )
+            js(
+                local.web,
+                "replaceAndScroll()" if kind == "studio" else "showTestCloze()",
+            )
+            check(
+                kind + " disabling restores original template functions",
+                js(
+                    local.web,
+                    "!!document.querySelector('b[data-test-blank]')"
+                    if kind == "studio"
+                    else "document.querySelectorAll('.genuine-cloze[show-state=answer]').length===1",
+                ),
+            )
+            local.weak_review.toggle(True)
+            show_question(local)
+            wait(lambda: local_hidden() == count - 2)
+            show_answer(local)
+            local._answerCard(1)
+            wait(
+                lambda: (
+                    ready(local)
+                    and local.state == "question"
+                    and local_hidden() == count - 2
+                )
+            )
+            check(
+                kind + " rating carries marked slots into learning",
+                mw.col.db.scalar("select count(*) from revlog") == len(baseline[1]) + 1,
+            )
         owner.toggle()
         wait(lambda: not owner.enabled)
         mw.moveToState("deckBrowser")
@@ -658,6 +789,28 @@ try:
             "fresh process restores custom text marks",
             reviewer.weak_review.value["known"] == ["s0", "s2"],
         )
+
+        for kind, target_deck, count in [
+            ("studio", expected["studio_deck"], 6),
+            ("enhanced", expected["enhanced_deck"], 7),
+        ]:
+            mw.moveToState("deckBrowser")
+            mw.col.decks.select(target_deck)
+            mw.moveToState("review")
+            wait(lambda: ready(reviewer))
+            wait(
+                lambda: (
+                    js(
+                        reviewer.web,
+                        "document.querySelectorAll('[data-wr-concealed=true]').length",
+                    )
+                    == count - 2
+                )
+            )
+            check(
+                kind + " fresh process restores marks",
+                reviewer.weak_review.value["known"] == ["s0", "s2"],
+            )
 
     mw.dual_review.stop()
     mw.learning_workspace.profile_close()

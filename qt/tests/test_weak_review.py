@@ -185,7 +185,10 @@ def test_all_marked_only_prompts_for_normal_rating(tmp_path, monkeypatch):
     assert controller.store.load(1, "s", "n", "m")["known"] == ["s0"]
 
 
-def test_custom_text_manifest_restores_individual_marks_without_image_fetch(tmp_path):
+@pytest.mark.parametrize("adapter", ["mumu-text-v1", "aswk-v1", "enhanced-cloze-v1"])
+def test_custom_text_manifest_restores_individual_marks_without_image_fetch(
+    tmp_path, adapter
+):
     controller = WeakReview.__new__(WeakReview)
     controller.mw = SimpleNamespace(
         pm=SimpleNamespace(profileFolder=lambda: str(tmp_path))
@@ -195,14 +198,27 @@ def test_custom_text_manifest_restores_individual_marks_without_image_fetch(tmp_
     controller.current = Mock(return_value=True)
     controller.publish = Mock()
     manifest = {
-        "adapter": "mumu-text-v1",
+        "adapter": adapter,
         "slots": ['[1,"same","hint"]', '[3,"same","hint"]'],
         "identity": ["question", "version 1"],
+        "request": "first-render",
     }
     controller.accept_manifest(manifest)
     controller.change(["s1"])
-    controller.pending_manifest = ""
-    controller.accept_manifest(manifest)
+    controller.publish.reset_mock()
+    controller.accept_manifest(manifest | {"request": "rebuilt-render"})
+    controller.publish.assert_called_once()
     assert controller.value["known"] == ["s1"]
     controller.accept_manifest(manifest | {"identity": ["question", "version 2"]})
     assert controller.value["known"] == []
+
+
+def test_stale_slot_request_cannot_mark_a_rebuilt_template():
+    controller = WeakReview.__new__(WeakReview)
+    controller.current = Mock(return_value=True)
+    controller.request = "new-content"
+    controller.change = Mock()
+    controller.receive(
+        '{"kind":"mark","token":"same-card","request":"old-content","key":"s0","known":true}'
+    )
+    controller.change.assert_not_called()
