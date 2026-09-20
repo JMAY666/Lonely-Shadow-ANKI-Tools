@@ -20,7 +20,7 @@ for mode in ("write", "verify"):
 package = Path(
     os.environ.get(
         "ANKI_BUILTIN_PACKAGE_ROOT",
-        str(ROOT / "dist/Anki-weak-review-templates-26.8.1"),
+        str(ROOT / "dist/Anki-weak-review-tables-26.8.1"),
     )
 ).resolve()
 assert "weak_review" in json.loads(

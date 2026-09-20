@@ -185,7 +185,9 @@ def test_all_marked_only_prompts_for_normal_rating(tmp_path, monkeypatch):
     assert controller.store.load(1, "s", "n", "m")["known"] == ["s0"]
 
 
-@pytest.mark.parametrize("adapter", ["mumu-text-v1", "aswk-v1", "enhanced-cloze-v1"])
+@pytest.mark.parametrize(
+    "adapter", ["mumu-text-v1", "mumu-table-v1", "aswk-v1", "enhanced-cloze-v1"]
+)
 def test_custom_text_manifest_restores_individual_marks_without_image_fetch(
     tmp_path, adapter
 ):

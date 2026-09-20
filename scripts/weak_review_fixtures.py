@@ -3,6 +3,42 @@
 import json
 
 
+def table_html():
+    # Inspected mu-aarea type=2 contract, with synthetic repeated cell answers.
+    rows = [[{"text": text, "show": 0} for text in ("", "列一", "列二", "列三")]]
+    for index in range(3):
+        rows.append(
+            [{"text": f"行 {index + 1}", "show": 0}]
+            + [
+                {"text": text, "show": 0}
+                for text in ("相同答案", "相同答案", "<b>格式</b><br>换行")
+            ]
+        )
+    return """<html><style>
+body{font:18px sans-serif;margin:8px}table{width:100%;border-collapse:collapse}
+th{background:#afd0be}td,th{padding:12px;border:1px solid #ddd;text-align:left}
+tr:nth-child(odd){background:#f6f8fa}uni-view{display:block}
+</style><body><div cardid="synthetic-table" card="table">
+<div class="flex-q-clz">合成表格题目</div><uni-view class="mumu-table" data-v-synthetic></uni-view>
+</div><script>
+window.testRows=ROWS;
+const answerSide=location.search.includes('answer');
+window.testComponent={type:{name:'mu-aarea'},props:{flip:answerSide?1:0,card:{answer:{type:2,A:testRows}}},parent:null};
+window.renderNative=()=>{
+ const host=document.querySelector('.mumu-table:not(.anki-wr-table-host)');
+ host.__vueParentComponent={type:{name:'uni-table'},parent:testComponent};
+ host.innerHTML='<table class="uni-table table--stripe">'+testRows.map((row,r)=>
+  '<tr>'+row.map((cell,c)=>r===0||c===0
+   ?'<th class="mumu-table-th"><uni-view><span class="mumu-font-14">'+cell.text+'</span></uni-view></th>'
+   :'<td class="mumu-table-td" rowspan="1" colspan="1" data-row="'+r+'" data-col="'+c+'"><span class="mumu-font-14">'+(answerSide||cell.show?cell.text:'(填空)')+'</span></td>'
+  ).join('')+'</tr>'+(r===0?'<tr></tr>':'')).join('')+'</table>';
+ host.querySelectorAll('td').forEach(td=>td.onclick=()=>{if(!answerSide){const cell=testRows[td.dataset.row][td.dataset.col];cell.show=1-cell.show;renderNative()}});
+};
+window.rebuildNative=()=>{const host=document.querySelector('.mumu-table:not(.anki-wr-table-host)'),replacement=document.createElement('uni-view');replacement.className='mumu-table';replacement.setAttribute('data-v-synthetic','');host.replaceWith(replacement);renderNative()};
+renderNative();
+</script></body></html>""".replace("ROWS", json.dumps(rows, ensure_ascii=False))
+
+
 def studio_html(answer=False):
     body = '<div class="buttons"><button id="showButton" onclick="replaceAndScroll()">N</button><button id="resetButton" onclick="resetButton()">K</button><button id="hideButton" onclick="restoreAndScroll()">J</button></div><div class="answers"><div class="content"><u>保留的划线提示</u><b>普通加粗</b>'
     body += "".join(

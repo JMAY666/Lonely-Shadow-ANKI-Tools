@@ -9,7 +9,7 @@ import time
 import traceback
 from pathlib import Path
 
-from weak_review_fixtures import enhanced_html, studio_html
+from weak_review_fixtures import enhanced_html, studio_html, table_html
 
 ROOT = Path(__file__).resolve().parents[1]
 if package := os.environ.get("ANKI_BUILTIN_PACKAGE_ROOT"):
@@ -182,6 +182,7 @@ try:
         deck = col.decks.id("逐空合成测试")
         image_deck = col.decks.id("图片区域合成测试")
         text_deck = col.decks.id("网页文字填空合成测试")
+        table_deck = col.decks.id("网页表格填空合成测试")
         studio_deck = col.decks.id("灰色遮挡合成测试")
         enhanced_deck = col.decks.id("增强挖空合成测试")
         note = col.new_note(col.models.by_name("Cloze"))
@@ -215,6 +216,12 @@ try:
             '<iframe id="receiver" src="/_anki/weak-review-text-synthetic?answer" style="width:100%;height:480px;border:0"></iframe>'
         )
         col.add_note(text_note, text_deck)
+        table_note = col.new_note(web_model)
+        for field, face in (("Front", "question"), ("Back", "answer")):
+            table_note[field] = (
+                f'<iframe id="receiver" src="/_anki/weak-review-table-synthetic?{face}" style="width:100%;height:480px;border:0"></iframe>'
+            )
+        col.add_note(table_note, table_deck)
         for target_deck, render in (
             (studio_deck, studio_html),
             (enhanced_deck, enhanced_html),
@@ -232,6 +239,7 @@ try:
             "image_deck": image_deck,
             "native_id": native_id,
             "text_deck": text_deck,
+            "table_deck": table_deck,
             "studio_deck": studio_deck,
             "enhanced_deck": enhanced_deck,
         }
@@ -262,6 +270,9 @@ try:
         "/_anki/weak-review-text-synthetic",
         "weak_review_text_synthetic",
         text_frame_html,
+    )
+    mediasrv.app.add_url_rule(
+        "/_anki/weak-review-table-synthetic", "weak_review_table_synthetic", table_html
     )
     app = aqt._run(
         ["anki", "-b", str(BASE), "-p", "Recall-Test", "--safemode", "-l", "zh_CN"],
@@ -609,6 +620,139 @@ try:
             mw.col.db.scalar("select count(*) from revlog")
             == len(before_text_marks[1]) + 1,
         )
+        right.deck.setCurrentIndex(right.deck.findData(expected["table_deck"]))
+        wait(lambda: not right.pending and ready(image_reviewer))
+
+        def table_hidden():
+            return frame_js(
+                "document.querySelectorAll('.anki-wr-table-host [data-wr-concealed=true]').length"
+            )
+
+        wait(lambda: table_hidden() == 9)
+        before_table_marks = snapshot()
+        check("nine table cells detected", len(image_reviewer.weak_review.slots) == 9)
+        frame_js("document.querySelector('.anki-wr-table-host td').click()")
+        wait(lambda: table_hidden() == 8)
+        check(
+            "table reveal does not mark",
+            image_reviewer.weak_review.value["known"] == [],
+        )
+        frame_js("document.querySelector('[data-wr-key=s0]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s0"])
+        show_question(image_reviewer)
+        wait(lambda: table_hidden() == 8)
+        check(
+            "equal table answers are independent and headers stay unchanged",
+            frame_js(
+                "document.querySelector('.anki-wr-table-host td:nth-child(3) [data-wr-concealed]').dataset.wrConcealed==='true' && !document.querySelector('.anki-wr-table-host th .anki-wr-mark') && document.querySelectorAll('.anki-wr-table-host th').length===7"
+            ),
+        )
+        image_reviewer._showAnswer()
+        wait(lambda: ready(image_reviewer) and table_hidden() == 0)
+        frame_js("document.querySelector('[data-wr-key=s2]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s0", "s2"])
+        check(
+            "table answer side preserves formatting and enables every mark",
+            frame_js(
+                "document.querySelectorAll('.anki-wr-table-host td b').length===3 && document.querySelectorAll('.anki-wr-table-host .anki-wr-mark:not(:disabled)').length===9"
+            ),
+        )
+        show_question(image_reviewer)
+        wait(lambda: table_hidden() == 7)
+        image_reviewer.weak_review.toggle_full(True)
+        wait(lambda: table_hidden() == 9)
+        image_reviewer.weak_review.toggle_full(False)
+        wait(lambda: table_hidden() == 7)
+        frame_js("document.querySelector('[data-wr-key=s0]').click()")
+        wait(lambda: table_hidden() == 8)
+        image_reviewer.weak_review.undo_mark()
+        wait(lambda: table_hidden() == 7)
+        image_reviewer.weak_review.reset()
+        wait(lambda: table_hidden() == 9)
+        image_reviewer.weak_review.undo_mark()
+        wait(lambda: table_hidden() == 7)
+        check("table controls do not reschedule", snapshot() == before_table_marks)
+        frame_js("rebuildNative()")
+        wait(lambda: ready(image_reviewer) and table_hidden() == 7)
+        check(
+            "table rebuild restores marks once",
+            frame_js(
+                "document.querySelectorAll('.anki-wr-table-host').length===1 && document.querySelectorAll('.anki-wr-mark').length===9"
+            ),
+        )
+        image_reviewer.weak_review.toggle(False)
+        wait(lambda: frame_js("!document.querySelector('.anki-wr-table-host')"))
+        frame_js("document.querySelector('.mumu-table td').click()")
+        check(
+            "table disable restores native click and leaves source data intact",
+            frame_js(
+                "testRows[1][1].show===1 && testRows[1][3].show===0 && document.querySelector('.mumu-table').style.display!=='none'"
+            ),
+        )
+        image_reviewer.weak_review.toggle(True)
+        wait(lambda: ready(image_reviewer) and table_hidden() == 7)
+        old_request = image_reviewer.weak_review.request
+        frame_js("testRows[0][1].text='修改的表头';renderNative()")
+        wait(
+            lambda: (
+                ready(image_reviewer)
+                and image_reviewer.weak_review.value["known"] == []
+            )
+        )
+        image_reviewer.weak_review.receive(
+            json.dumps(
+                {
+                    "kind": "mark",
+                    "token": image_reviewer.weak_review.token,
+                    "request": old_request,
+                    "key": "s1",
+                    "known": True,
+                }
+            )
+        )
+        check(
+            "table header edits invalidate marks and reject stale clicks",
+            image_reviewer.weak_review.value["known"] == [],
+        )
+        check(
+            "updated table remains visible after replacing its review view",
+            frame_js(
+                "document.querySelector('.anki-wr-table-host').getBoundingClientRect().width > 0"
+            ),
+        )
+        for kind, change in (
+            ("formula", f"testRows[1][1].text={json.dumps(r'\(x^2\)')}"),
+            ("media", "testRows[1][1].text='<img src=\"unsupported\">'"),
+            ("uneven rows", "testRows[1].pop()"),
+        ):
+            frame_js(change + ";renderNative()")
+            wait(lambda: "空格或图片" in image_reviewer.weak_review.status)
+            check(
+                kind + " restores original table renderer",
+                frame_js(
+                    "!document.querySelector('.anki-wr-table-host') && document.querySelector('.mumu-table').style.display!=='none'"
+                ),
+            )
+            show_question(image_reviewer)
+            wait(lambda: table_hidden() == 7)
+        image_reviewer._showAnswer()
+        wait(lambda: ready(image_reviewer) and table_hidden() == 0)
+        mw.grab().save(str(BASE / "table-answer.png"))
+        image_reviewer._answerCard(1)
+        wait(
+            lambda: (
+                ready(image_reviewer)
+                and image_reviewer.state == "question"
+                and table_hidden() == 7
+            )
+        )
+        check(
+            "table marks carry through actual learning step",
+            image_reviewer.weak_review.value["known"] == ["s0", "s2"]
+            and mw.col.db.scalar("select count(*) from revlog")
+            == len(before_table_marks[1]) + 1,
+        )
+        mw.grab().save(str(BASE / "table-question.png"))
         for kind, target_deck, count in [
             ("studio", expected["studio_deck"], 6),
             ("enhanced", expected["enhanced_deck"], 7),
@@ -787,6 +931,24 @@ try:
         )
         check(
             "fresh process restores custom text marks",
+            reviewer.weak_review.value["known"] == ["s0", "s2"],
+        )
+
+        mw.moveToState("deckBrowser")
+        mw.col.decks.select(expected["table_deck"])
+        mw.moveToState("review")
+        wait(lambda: ready(reviewer))
+        wait(
+            lambda: (
+                js(
+                    reviewer.web,
+                    "document.querySelector('#receiver').contentDocument.querySelectorAll('[data-wr-concealed=true]').length",
+                )
+                == 7
+            )
+        )
+        check(
+            "fresh process restores table marks in single review",
             reviewer.weak_review.value["known"] == ["s0", "s2"],
         )
 

@@ -76,7 +76,7 @@ from verify_web_runtime import verify
 verify(packages / "_aqt/data/web/sveltekit")
 assert not (destination / "addons21").exists()
 manifest = {
-    "weak_review": "3: per-slot recall for native clozes, Studio aswk, Enhanced Cloze, supported webpage text and SVG masks; guarded asynchronous rendering, native learning boundaries, undo and restart persistence",
+    "weak_review": "4: per-slot recall for native clozes, Studio aswk, Enhanced Cloze, supported webpage text, table cells and SVG masks; guarded asynchronous rendering, native learning boundaries, undo and restart persistence",
     "dual_review": "1: two native review panels, shared scheduler and revlog, exclusive reservations, active-pane shortcuts and audio, global undo, compact tabs",
     "desktop_tools": "Minimize to Tray 2 0.2; AnkiPenDown 1.1; native lifecycle and Simplified Chinese settings",
     "edition": "Anki 26.8.1 with built-in SynapsePro, FSRS Helper and Pass/Fail 2",

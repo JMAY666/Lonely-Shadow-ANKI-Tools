@@ -226,6 +226,7 @@ class WeakReview:
             not in (
                 "mumu-svg-v1",
                 "mumu-text-v1",
+                "mumu-table-v1",
                 "native-cloze-v1",
                 "aswk-v1",
                 "enhanced-cloze-v1",

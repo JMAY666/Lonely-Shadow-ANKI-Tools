@@ -441,13 +441,81 @@
         }
         return template.content;
     }
+    function tableDescription() {
+        const matches = [];
+        for (const rich of document.querySelectorAll(".mumu-table")) {
+            let component = rich.__vueParentComponent;
+            for (let depth = 0; component && depth < 12; depth++, component = component.parent) {
+                if (component.type?.name !== "mu-aarea") { continue; }
+                const answer = component.props?.card?.answer;
+                if (
+                    answer?.type === 2 && Array.isArray(answer.A)
+                    && component.props.flip === (config.side === "answer" ? 1 : 0)
+                ) { matches.push({ rich, rows: answer.A }); }
+                break;
+            }
+        }
+        if (matches.length !== 1) { return null; }
+        const { rich, rows } = matches[0];
+        if (
+            rows.length < 2 || rows.length > 513 || !Array.isArray(rows[0]) || rows[0].length < 2
+            || (rows.length - 1) * (rows[0].length - 1) > 512
+            || rows.some(row =>
+                !Array.isArray(row) || row.length !== rows[0].length
+                || row.some(cell =>
+                    !cell || !localTextIsReady(cell.text) || cell.text.length > 18000
+                    || ![0, 1].includes(cell.show) || !inlineMarkup([cell.text])
+                )
+            )
+        ) { return null; }
+        const normalized = rows.map(row => row.map(cell => cell.text));
+        if (JSON.stringify(normalized).length > 100000) { return null; }
+        const tables = rich.querySelectorAll("table");
+        if (tables.length !== 1) { return null; }
+        // The inspected renderer emits an empty row after the column headings.
+        // Match actual cells to the authoritative grid, never by answer text alone.
+        const rendered = [...tables[0].rows].filter(row => row.cells.length);
+        if (rendered.length !== rows.length) { return null; }
+        const slots = [];
+        for (let r = 0; r < rows.length; r++) {
+            const cells = [...rendered[r].cells];
+            if (cells.length !== rows[r].length) { return null; }
+            for (let c = 0; c < cells.length; c++) {
+                const cell = cells[c], data = rows[r][c];
+                const header = r === 0 || c === 0;
+                const spans = cell.querySelectorAll("span.mumu-font-14");
+                if (
+                    cell.tagName !== (header ? "TH" : "TD") || cell.rowSpan !== 1 || cell.colSpan !== 1
+                    || !cell.classList.contains(header ? "mumu-table-th" : "mumu-table-td")
+                    || spans.length !== 1 || (!header && spans[0].parentElement !== cell)
+                ) { return null; }
+                const expected = document.createElement("span");
+                expected.innerHTML = header || config.side === "answer" || data.show ? data.text : "(填空)";
+                if (spans[0].innerHTML !== expected.innerHTML) { return null; }
+                if (!header) {
+                    slots.push({ index: [r, c], answer: data.text, hint: "(填空)", revealed: data.show });
+                }
+            }
+        }
+        const identityHost = rich.closest("[cardid][card]");
+        if (!identityHost) { return null; }
+        const identity = [
+            identityHost.getAttribute("cardid"),
+            identityHost.getAttribute("card"),
+            document.querySelector(".flex-q-clz")?.innerHTML || "",
+            normalized,
+        ];
+        return { rich, slots, identity, signature: JSON.stringify(identity), table: true };
+    }
     function discoverInline(found) {
         if (manifest === found.signature && inlineSource === found.rich && inlineHost?.isConnected) { return; }
-        const fragment = inlineMarkup(found.parts);
-        const targets = fragment ? [...fragment.querySelectorAll("[data-wr-inline]")] : [];
+        const fragment = found.table ? found.rich.cloneNode(true) : inlineMarkup(found.parts);
+        const targets = fragment
+            ? [...fragment.querySelectorAll(found.table ? "td.mumu-table-td > span.mumu-font-14" : "[data-wr-inline]")]
+            : [];
         if (
             !fragment || targets.length !== found.slots.length
-            || targets.some((el, i) => el.dataset.wrInline !== String(found.slots[i].index))
+            || (!found.table && targets.some((el, i) => el.dataset.wrInline !== String(found.slots[i].index)))
         ) {
             restore();
             notify({ kind: "unsupported" });
@@ -463,13 +531,17 @@
         revealed.clear();
         manifest = found.signature;
         inlineSource = found.rich;
+        // Clone the wrapper after restore(), so a refreshed table never inherits
+        // the display:none that was hiding the previous native view.
         inlineHost = found.rich.cloneNode(false);
-        inlineHost.classList.add("anki-wr-inline-host");
+        inlineHost.classList.add(found.table ? "anki-wr-table-host" : "anki-wr-inline-host");
         const scopes = [...found.rich.attributes].filter(attr => /^data-v-/.test(attr.name));
         for (const el of fragment.querySelectorAll("*")) {
             for (const attr of scopes) { el.setAttribute(attr.name, attr.value); }
         }
-        inlineHost.appendChild(fragment);
+        if (found.table) {
+            while (fragment.firstChild) { inlineHost.appendChild(fragment.firstChild); }
+        } else { inlineHost.appendChild(fragment); }
         const display = found.rich.style.getPropertyValue("display");
         const priority = found.rich.style.getPropertyPriority("display");
         const host = inlineHost;
@@ -499,19 +571,19 @@
             entry.el.after(button);
             button.disabled = true;
             const reveal = event => {
-                if (!active) { return; }
+                if (!active || event.target.closest(".anki-wr-mark")) { return; }
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 if (revealed.has(entry.key)) { revealed.delete(entry.key); }
                 else { revealed.add(entry.key); }
                 render();
             };
-            listen(entry.el, "click", reveal);
+            listen(found.table ? entry.el.parentElement : entry.el, "click", reveal);
             listen(entry.el, "keydown", event => {
                 if ((event.key === " " || event.key === "Enter") && !event.repeat) { reveal(event); }
             });
         }
-        const next = found.rich.closest(".text-left")?.querySelector(".showanswer");
+        const next = !found.table && found.rich.closest(".text-left")?.querySelector(".showanswer");
         if (next) {
             listen(next, "click", event => {
                 if (!active) { return; }
@@ -524,7 +596,7 @@
         }
         notify({
             kind: "manifest",
-            adapter: "mumu-text-v1",
+            adapter: found.table ? "mumu-table-v1" : "mumu-text-v1",
             identity: found.identity,
             slots: found.slots.map(slot => JSON.stringify([slot.index, slot.answer, slot.hint])),
         });
@@ -577,7 +649,7 @@
     }
     function discoverRegions() {
         if (!config?.enabled) { return; }
-        const inline = inlineDescription();
+        const inline = inlineDescription() || tableDescription();
         if (inline) {
             discoverInline(inline);
             return;
