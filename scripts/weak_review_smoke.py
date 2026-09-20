@@ -53,9 +53,10 @@ def wait(predicate, timeout=25):
     raise TimeoutError(str(predicate))
 
 
-def js(web, source):
+def js(web, source, *, in_frame=False):
     received = []
-    web.page().runJavaScript(source, received.append)
+    target = web.page().mainFrame().children()[0] if in_frame else web.page()
+    target.runJavaScript(source, received.append)
     wait(lambda: bool(received))
     return received[0]
 
@@ -77,6 +78,64 @@ def mark(reviewer, index):
     before = len(reviewer.weak_review.value["known"])
     js(reviewer.web, f"document.querySelector('[data-wr-key=s{index}]').click()")
     wait(lambda: len(reviewer.weak_review.value["known"]) != before)
+
+
+def mouse_click(reviewer, selector, *, in_frame=False):
+    mw.activateWindow()
+    reviewer.web.setFocus()
+    wait(lambda: reviewer.shortcuts.available())
+    point = js(
+        reviewer.web,
+        """(selector => {
+            const target = document.querySelector(selector);
+            target.scrollIntoView({block: 'center'});
+            const rect = target.getBoundingClientRect();
+            return [rect.x + rect.width / 2, rect.y + rect.height / 2];
+        })("""
+        + json.dumps(selector)
+        + ")",
+        in_frame=in_frame,
+    )
+    if in_frame:
+        outer = js(
+            reviewer.web,
+            "{const frame=document.querySelector('#receiver');"
+            "frame.scrollIntoView({block:'center'});const rect=frame.getBoundingClientRect();"
+            "[rect.x + frame.clientLeft, rect.y + frame.clientTop]}",
+        )
+        point = [point[i] + outer[i] for i in range(2)]
+    zoom = reviewer.web.zoomFactor()
+    QTest.mouseClick(
+        reviewer.web.focusProxy() or reviewer.web,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(round(point[0] * zoom), round(point[1] * zoom)),
+    )
+
+
+def press_space(reviewer):
+    results["last_space"] = {
+        "available": reviewer.shortcuts.available(),
+        "focus": type(app.focusWidget()).__name__,
+        "dom": js(
+            reviewer.web,
+            "({allowed: ankiReviewShortcutAllowed(), focused: document.hasFocus(), "
+            "active: document.activeElement.tagName})",
+        ),
+    }
+    QTest.keyClick(app.focusWidget(), Qt.Key.Key_Space)
+
+
+def cross_origin_frame(reviewer):
+    previous_request = reviewer.weak_review.request
+    js(
+        reviewer.web,
+        "{const frame=document.querySelector('#receiver'),url=new URL(frame.src);"
+        "url.hostname='localhost';frame.src=url.href}",
+    )
+    wait(lambda: reviewer.weak_review.request != previous_request)
+    assert js(
+        reviewer.web, "document.querySelector('#receiver').contentDocument === null"
+    )
 
 
 def hidden(reviewer):
@@ -247,13 +306,35 @@ try:
     else:
         expected = json.loads((BASE / "expected.json").read_text())
 
+    from PyQt6.QtTest import QTest
+
     import aqt
     import aqt.builtin_features.weak_review as feature
     from aqt import mediasrv
     from aqt.progress import ProgressDialog
-    from aqt.qt import QApplication, QLabel, QTimer
+    from aqt.qt import QApplication, QLabel, QPoint, Qt, QTimer
 
     revision = 0
+
+    # Substitute only the accepted remote origin in this isolated process. The
+    # second loopback hostname exercises real cross-origin focus without fetching
+    # a vendor page or weakening the production origin check.
+    original_init = feature.WeakReview.__init__
+
+    def init_with_synthetic_origin(self, reviewer):
+        original_init(self, reviewer)
+        scripts = reviewer.web.page().scripts()
+        (script,) = scripts.find("anki-weak-review")
+        source = script.sourceCode()
+        original = 'origin === "https://kyxz288.com"'
+        assert original in source
+        scripts.remove(script)
+        script.setSourceCode(
+            source.replace(original, 'origin === "http://localhost:" + location.port')
+        )
+        scripts.insert(script)
+
+    feature.WeakReview.__init__ = init_with_synthetic_origin
 
     def synthetic_image_snapshot(url):
         assert url.startswith("data:image/svg+xml;base64,"), (
@@ -316,15 +397,31 @@ try:
             "revealing an answer never marks it",
             reviewer.weak_review.value["known"] == [],
         )
+        mw.activateWindow()
+        reviewer.web.setFocus()
+        js(reviewer.web, "document.querySelector('[data-wr-key=s0]').focus()")
+        press_space(reviewer)
         check(
-            "focused marking control keeps Space out of review shortcuts",
-            js(
-                reviewer.web,
-                "{const b=document.querySelector('[data-wr-key=s0]');b.focus();const e=new KeyboardEvent('keydown',{key:' ',bubbles:true,cancelable:true});b.dispatchEvent(e);!e.defaultPrevented}",
-            )
-            is True,
+            "keyboard-focused marking control remains protected from review shortcuts",
+            js(reviewer.web, "ankiReviewShortcutAllowed()") is False
+            and reviewer.state == "question"
+            and snapshot() == before,
         )
-        mark(reviewer, 0)
+        mouse_click(reviewer, "[data-wr-key=s0]")
+        wait(lambda: reviewer.weak_review.value["known"] == ["s0"])
+        press_space(reviewer)
+        wait(
+            lambda: (
+                reviewer.state == "answer"
+                and ready(reviewer)
+                and reviewer.weak_review.value["known"] == ["s0"]
+                and hidden(reviewer) == 0
+            )
+        )
+        check(
+            "Space after a mouse mark reveals the native answer without rating",
+            reviewer.weak_review.value["known"] == ["s0"] and snapshot() == before,
+        )
         show_question(reviewer)
         wait(lambda: hidden(reviewer) == 9)
         check(
@@ -434,12 +531,7 @@ try:
         owner.activate(right, focus=True)
 
         def frame_js(source):
-            return js(
-                image_reviewer.web,
-                "document.querySelector('#receiver').contentWindow.eval("
-                + json.dumps(source)
-                + ")",
-            )
+            return js(image_reviewer.web, source, in_frame=True)
 
         wait(
             lambda: (
@@ -516,6 +608,8 @@ try:
             )
 
         wait(lambda: text_hidden() == 9)
+        cross_origin_frame(image_reviewer)
+        wait(lambda: text_hidden() == 9)
         before_text_marks = snapshot()
         check(
             "nine custom text slots detected",
@@ -527,8 +621,23 @@ try:
             "custom text reveal does not mark",
             image_reviewer.weak_review.value["known"] == [],
         )
-        frame_js("document.querySelector('[data-wr-key=s0]').click()")
+        mouse_click(image_reviewer, "[data-wr-key=s0]", in_frame=True)
         wait(lambda: image_reviewer.weak_review.value["known"] == ["s0"])
+        press_space(image_reviewer)
+        wait(
+            lambda: (
+                image_reviewer.state == "answer"
+                and ready(image_reviewer)
+                and image_reviewer.weak_review.value["known"] == ["s0"]
+                and text_hidden() == 0
+            )
+        )
+        check(
+            "Space after a mouse mark in a frame reveals only the active pane",
+            image_reviewer.weak_review.value["known"] == ["s0"]
+            and reviewer.state == "question"
+            and snapshot() == before_text_marks,
+        )
         show_question(image_reviewer)
         wait(lambda: text_hidden() == 8)
         check(
@@ -933,6 +1042,28 @@ try:
             "fresh process restores custom text marks",
             reviewer.weak_review.value["known"] == ["s0", "s2"],
         )
+        before = snapshot()
+        cross_origin_frame(reviewer)
+        mouse_click(reviewer, "[data-wr-key=s0]", in_frame=True)
+        wait(lambda: reviewer.weak_review.value["known"] == ["s2"])
+        press_space(reviewer)
+        wait(
+            lambda: (
+                reviewer.state == "answer"
+                and ready(reviewer)
+                and reviewer.weak_review.value["known"] == ["s2"]
+            )
+        )
+        check(
+            "single-pane Space works after removing a mark inside a remote frame",
+            snapshot() == before,
+        )
+        js(
+            reviewer.web,
+            "document.querySelector('[data-wr-key=s0]').click()",
+            in_frame=True,
+        )
+        wait(lambda: reviewer.weak_review.value["known"] == ["s0", "s2"])
 
         mw.moveToState("deckBrowser")
         mw.col.decks.select(expected["table_deck"])

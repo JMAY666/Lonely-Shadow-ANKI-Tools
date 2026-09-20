@@ -88,6 +88,12 @@
             event.preventDefault();
             event.stopImmediatePropagation();
             if (!active || button.disabled) { return; }
+            // Mouse marks must hand Space back to the reviewer, including when
+            // the control lives in a card iframe. Keyboard activation stays local.
+            if (event.detail > 0) {
+                button.blur();
+                if (child) { window.parent.focus(); }
+            }
             button.disabled = true;
             notify({ kind: "mark", key: entry.key, known: !known.has(entry.key) });
         });
