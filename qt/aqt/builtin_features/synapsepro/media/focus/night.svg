@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192" viewBox="0 0 256 192">
+<title>night</title><circle cx="172" cy="96" r="77" fill="#222426"/>
+<g fill="none" stroke="#484b4e" stroke-width=".8"><circle cx="172" cy="96" r="30"/><circle cx="172" cy="96" r="35"/><circle cx="172" cy="96" r="40"/><circle cx="172" cy="96" r="45"/><circle cx="172" cy="96" r="50"/><circle cx="172" cy="96" r="55"/><circle cx="172" cy="96" r="60"/><circle cx="172" cy="96" r="65"/><circle cx="172" cy="96" r="70"/></g>
+<circle cx="172" cy="96" r="22" fill="#acbbcd"/><circle cx="172" cy="96" r="5" fill="#242629"/>
+<rect x="23" y="24" width="149" height="149" rx="3" fill="#000" opacity=".15"/>
+<rect x="18" y="18" width="150" height="150" rx="3" fill="#acbbcd"/>
+<path d="M18 133 168 70v98H18Z" fill="#475772" opacity=".12"/>
+<g fill="none" stroke="#475772" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path fill="white" stroke="none" d="M105 43a29 29 0 1 0 13 52 28 28 0 0 1-13-52Z"/><path d="m46 147 6-24 8 24m15 0 9-33 8 33m33 0 8-22 9 22M49 57h8m-4-4v8m71 44h10m-5-5v10"/></g>
+</svg>

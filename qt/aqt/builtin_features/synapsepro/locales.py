@@ -140,6 +140,25 @@ def _(text: str) -> str:
 # Translations
 # --------------------------------------------------------------------- #
 TRANSLATIONS: Dict[str, Dict[str, str]] = {
+    "Focus": {"zh": "专注"},
+    "Short break": {"zh": "短休息"},
+    "Long break": {"zh": "长休息"},
+    "Waiting to start": {"zh": "待开始"},
+    "Running": {"zh": "进行中"},
+    "{phase} · round {current}/{total}\n{status}": {"zh": "{phase} · 本组第 {current}/{total} 轮\n{status}"},
+    "Gentle Piano": {"zh": "轻柔钢琴"},
+    "Meditation Piano": {"zh": "冥想钢琴"},
+    "Dreamscape": {"zh": "梦境氛围"},
+    "Soft Electric Piano": {"zh": "柔和电钢琴"},
+    "Easy Afternoon": {"zh": "悠闲午后"},
+    "Bossa Nova": {"zh": "波萨诺瓦"},
+    "Forest Birds": {"zh": "林间鸟鸣"},
+    "Flowing Stream": {"zh": "潺潺溪流"},
+    "Ocean Waves": {"zh": "海岸浪声"},
+    "Coffee Shop": {"zh": "咖啡馆"},
+    "Fireplace": {"zh": "壁炉柴火"},
+    "Summer Night": {"zh": "夏夜虫鸣"},
+    "Music sources and licenses": {"zh": "音源与授权"},
 
     # ================================================================= #
     # __init__.py – tooltips & menu entries

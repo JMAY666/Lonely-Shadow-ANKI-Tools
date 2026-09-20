@@ -105,6 +105,18 @@ BUILTIN_TRACKS = [
     ("jazz.mp3",           _("Jazz"),        "jazz.png"),
     ("rain.mp3",           _("Rain"),        "rain.png"),
     ("cozy.mp3",           _("Cozy"),        "cozy.png"),
+    ("focus/gymnopedie.mp3", _("Gentle Piano"), "focus/piano.svg"),
+    ("focus/meditation.mp3", _("Meditation Piano"), "focus/meditation.svg"),
+    ("focus/dreams.mp3", _("Dreamscape"), "focus/dreams.svg"),
+    ("focus/clean_soul.mp3", _("Soft Electric Piano"), "focus/electric.svg"),
+    ("focus/easy_lemon.mp3", _("Easy Afternoon"), "focus/afternoon.svg"),
+    ("focus/bossa.mp3", _("Bossa Nova"), "focus/bossa.svg"),
+    ("focus/birds.ogg", _("Forest Birds"), "focus/birds.svg"),
+    ("focus/stream.ogg", _("Flowing Stream"), "focus/stream.svg"),
+    ("focus/waves.ogg", _("Ocean Waves"), "focus/waves.svg"),
+    ("focus/coffee_shop.ogg", _("Coffee Shop"), "focus/cafe.svg"),
+    ("focus/fireplace.ogg", _("Fireplace"), "focus/fire.svg"),
+    ("focus/summer_night.ogg", _("Summer Night"), "focus/night.svg"),
 ]
 
 FADE_MS = 450          # play / pause fade duration
@@ -855,6 +867,7 @@ class MiniMusicPlayer(QDialog):
                 "local": _("Local"),
                 "subtitle": _("Focus Music"),
                 "sounds": _("Sounds"),
+                "credits": _("Music sources and licenses"),
                 "myTracks": _("My Tracks"),
                 "resume": _("Resume playback on startup"),
                 "play": _("Play / Pause"),
@@ -919,6 +932,13 @@ class MiniMusicPlayer(QDialog):
             self._open_add_track_dialog()
         elif a == "delTrack":
             self._delete_user_track(data.get("id"))
+        elif a == "credits":
+            from aqt.utils import showText
+            credits_path = _get_music_file_path("focus/CREDITS.html")
+            if credits_path:
+                with open(credits_path, encoding="utf-8") as credits_file:
+                    showText(credits_file.read(), parent=self, type="html",
+                             title=_("Music sources and licenses"))
         elif a == "mode":
             self._set_mode(data.get("m") or "local")
         elif a == "sc":

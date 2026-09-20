@@ -114,6 +114,7 @@ class SidebarWidget(QWidget):
         # ask us to re-sync their icon's active state.
         self._dock_button_refs: dict[str, weakref.ReferenceType['PushButtonType']] = {}
         self._timer_widget_container: Optional['WidgetType'] = None; self._timer_time_label: Optional['LabelType'] = None
+        self._timer_cycle_label: Optional['LabelType'] = None
         self._timer_start_pause_button: Optional['PushButtonType'] = None; self._timer_reset_button: Optional['PushButtonType'] = None; self._timer_skip_button: Optional['PushButtonType'] = None
         self._start_icon: Optional['IconType'] = None; self._pause_icon: Optional['IconType'] = None; self._reset_icon: Optional['IconType'] = None; self._skip_icon: Optional['IconType'] = None
         self.init_ui()
@@ -267,6 +268,12 @@ class SidebarWidget(QWidget):
             self._timer_widget_container.setObjectName("timerContainer")
             timer_layout = QVBoxLayout(self._timer_widget_container)
             timer_layout.setContentsMargins(2, 5, 2, 5); timer_layout.setSpacing(4)
+
+            self._timer_cycle_label = QLabel()
+            self._timer_cycle_label.setObjectName("timerCycleLabel")
+            self._timer_cycle_label.setWordWrap(True)
+            self._timer_cycle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            timer_layout.addWidget(self._timer_cycle_label)
 
             try: time_text = pomodoro.format_time(pomodoro.get_current_phase_duration())
             except Exception: time_text = pomodoro.format_time(constants.DEFAULT_POMODORO_CONFIG.get("work_minutes", 25) * 60)
@@ -605,6 +612,7 @@ class SidebarWidget(QWidget):
            QPushButton#timerControlButton:!disabled:hover {{ background-color: {timer_hover}; }}
            QPushButton#timerControlButton:!disabled:pressed {{ background-color: {timer_press}; }}
            QLabel#timerTimeLabel {{ color: {timer_text}; font-weight: bold; }}
+           QLabel#timerCycleLabel {{ color: {timer_text}; font-size: 10px; background: transparent; }}
            QFrame#bottomSeparatorLine {{ border: none; border-top: 1px solid {sep}; margin: 5px 3px; min-height: 1px; max-height: 1px; }}
            """
         self.setStyleSheet(stylesheet)
@@ -615,6 +623,23 @@ class SidebarWidget(QWidget):
             state = pomodoro.current_state
             is_active = state in [constants.STATE_WORK, constants.STATE_SHORT_BREAK, constants.STATE_LONG_BREAK]
             self._timer_start_pause_button.setIcon(self._pause_icon if is_active else self._start_icon)
+            if self._timer_cycle_label:
+                phase, round_number, target = pomodoro.get_cycle_progress()
+                phase_label = {
+                    constants.STATE_WORK: _("Focus"),
+                    constants.STATE_SHORT_BREAK: _("Short break"),
+                    constants.STATE_LONG_BREAK: _("Long break"),
+                }[phase]
+                self._timer_cycle_label.setText(f"{phase_label}\n{round_number}/{target}")
+                status = _("Paused") if state == constants.STATE_PAUSED else (
+                    _("Waiting to start") if state == constants.STATE_IDLE else _("Running")
+                )
+                description = _("{phase} · round {current}/{total}\n{status}").format(
+                    phase=phase_label, current=round_number, total=target, status=status
+                )
+                self._timer_cycle_label.setToolTip(description)
+                self._timer_cycle_label.setAccessibleName(description)
+                self._timer_time_label.setToolTip(description)
             self.update_timer_label_only()
         except Exception as e: print(f"Error updating timer UI: {e}")
 

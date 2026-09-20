@@ -832,6 +832,27 @@ def format_time(seconds):
     mins, secs = divmod(int(seconds), 60)
     return f"{mins:02d}:{secs:02d}"
 
+def get_cycle_progress() -> tuple[int, int, int]:
+    """Describe the displayed phase and its work round within the current cycle.
+
+    Waiting and paused phases retain their identity. The timer resets its work
+    counter before the long break, so that break still belongs to the last round.
+    This is a view of the existing timer, not a second completion counter.
+    """
+    phase = current_state
+    if phase == constants.STATE_PAUSED:
+        phase = previous_state
+    elif phase == constants.STATE_IDLE:
+        phase = intended_next_state
+    if phase not in (constants.STATE_WORK, constants.STATE_SHORT_BREAK, constants.STATE_LONG_BREAK):
+        phase = constants.STATE_WORK
+    target = max(1, pomodoros_target or constants.DEFAULT_POMODORO_CONFIG["pomodoros_before_long_break"])
+    if phase == constants.STATE_LONG_BREAK:
+        round_number = target
+    else:
+        round_number = pomodoros_completed_cycle + (phase == constants.STATE_WORK)
+    return phase, max(1, min(round_number, target)), target
+
 def get_current_phase_duration() -> int:
     state = current_state if current_state != constants.STATE_PAUSED else previous_state
     if state == constants.STATE_WORK:        return work_duration

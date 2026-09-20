@@ -6,6 +6,19 @@ mod release
 default:
     @just --list
 
+focus-music-assets:
+    & "out/pyenv/Scripts/python.exe" scripts/focus_music_assets.py
+
+focus-tools-test:
+    $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_focus_tools.py
+
+focus-tools-smoke run_name:
+    $env:QT_QPA_PLATFORM="offscreen"; & "out/pyenv/Scripts/python.exe" scripts/focus_tools_smoke.py {{run_name}}
+
+focus-tools-format:
+    & "out/pyenv/Scripts/ruff.exe" check --select I --fix scripts/focus_music_assets.py scripts/focus_tools_smoke.py qt/tests/test_focus_tools.py
+    & "out/pyenv/Scripts/ruff.exe" format scripts/focus_music_assets.py scripts/focus_tools_smoke.py qt/tests/test_focus_tools.py
+
 weak-review-format:
     & "out/pyenv/Scripts/ruff.exe" check --select I --fix qt/aqt/builtin_features/weak_review.py qt/aqt/builtin_features/weak_review_store.py qt/aqt/reviewer.py qt/tests/test_weak_review.py scripts/weak_review_smoke.py scripts/weak_review_package_check.py scripts/weak_review_fixtures.py
     & "out/pyenv/Scripts/ruff.exe" format qt/aqt/builtin_features/weak_review.py qt/aqt/builtin_features/weak_review_store.py qt/aqt/reviewer.py qt/tests/test_weak_review.py scripts/weak_review_smoke.py scripts/weak_review_package_check.py scripts/weak_review_fixtures.py
