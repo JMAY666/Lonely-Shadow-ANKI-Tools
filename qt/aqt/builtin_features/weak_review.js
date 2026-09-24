@@ -614,7 +614,13 @@
         const container = containers[0];
         const imageHost = container.querySelector(".svg_background-image");
         const img = imageHost?.querySelector("img");
-        const masks = [...container.querySelectorAll(":scope > .svg_mask, :scope > .svg_mask_show")];
+        // Some diagrams retain an empty drawing point between real rectangles.
+        // It hides no answer and must not disable the card or consume a slot.
+        // Keep all other geometry in the validation below, including malformed
+        // rectangles and regions with only one zero dimension.
+        const masks = [...container.querySelectorAll(":scope > .svg_mask, :scope > .svg_mask_show")].filter(el =>
+            parseFloat(el.style.width) !== 0 || parseFloat(el.style.height) !== 0
+        );
         if (!img?.complete || !img.naturalWidth || !masks.length) { return null; }
         const width = parseFloat(imageHost.style.width) || imageHost.clientWidth;
         const height = parseFloat(imageHost.style.height) || imageHost.clientHeight;

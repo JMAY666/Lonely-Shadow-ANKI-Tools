@@ -182,8 +182,12 @@ def data_url(data):
 
 
 def frame_html():
+    # The inspected green diagram includes an invisible 0 x 0 region between
+    # real masks. It must neither disable the card nor consume a recall slot.
+    empty = '<uni-view id="empty-region" class="svg_mask" style="left:18px;top:160px;width:0px;height:0px"></uni-view>'
     masks = "".join(
-        f'<uni-view class="svg_mask" style="left:{20 + (i % 2) * 240}px;top:{22 + (i // 2) * 70}px;width:180px;height:30px"></uni-view>'
+        (empty if i == 4 else "")
+        + f'<uni-view id="region-{i}" class="svg_mask" style="left:{20 + (i % 2) * 240}px;top:{22 + (i // 2) * 70}px;width:180px;height:30px"></uni-view>'
         for i in range(10)
     )
     return f'''<html><style>body{{margin:8px}}.svg_answer_parent{{position:relative;width:480px;height:400px}}.svg_mask,.svg_mask_show{{position:absolute;box-sizing:border-box}}.svg_mask{{background:#c6b882}}.svg_background-image{{display:block}}.svg_background-image img{{width:100%;height:100%}}</style>
@@ -565,6 +569,27 @@ try:
                 "document.querySelector('.svg_background-image img').src.startsWith('data:image/svg+xml;base64,')"
             ),
         )
+        check(
+            "empty image region consumes no recall slot",
+            frame_js(
+                "document.querySelectorAll('.anki-wr-region-mark').length===10 && "
+                "!document.querySelector('#empty-region').hasAttribute('data-wr-hidden')"
+            ),
+        )
+        frame_js("document.querySelector('#region-4').click()")
+        frame_js("document.querySelector('[data-wr-key=s4]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s0", "s4"])
+        show_question(image_reviewer)
+        check(
+            "region after empty placeholder remembers the correct answer",
+            frame_js(
+                "document.querySelector('#region-4').dataset.wrHidden==='false' && "
+                "document.querySelector('#region-5').dataset.wrHidden==='true' && "
+                "document.querySelectorAll('[data-wr-hidden=true]').length===8"
+            ),
+        )
+        frame_js("document.querySelector('[data-wr-key=s4]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s0"])
         before_resize = image_reviewer.weak_review.manifest
         mw.resize(1050, 700)
         wait(lambda: ready(image_reviewer))
@@ -595,7 +620,7 @@ try:
         check(
             "invalid image snapshot restores the original template",
             frame_js(
-                "document.querySelectorAll('.anki-wr-mark').length===0 && document.querySelectorAll('.svg_mask').length===10"
+                "document.querySelectorAll('.anki-wr-mark').length===0 && document.querySelectorAll('.svg_mask').length===11"
             ),
         )
         mw.grab().save(str(BASE / "dual.png"))
