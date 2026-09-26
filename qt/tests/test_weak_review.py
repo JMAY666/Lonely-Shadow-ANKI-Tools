@@ -1,6 +1,7 @@
 # Copyright: Ankitects Pty Ltd and contributors
 # License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
 
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -227,3 +228,52 @@ def test_stale_slot_request_cannot_mark_a_rebuilt_template():
         '{"kind":"mark","token":"same-card","request":"old-content","key":"s0","known":true}'
     )
     controller.change.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "side,render_request,manifest,action_allowed,expected",
+    [
+        ("question", "current", "slots", True, True),
+        ("answer", "current", "slots", True, False),
+        ("question", "stale", "slots", True, False),
+        ("question", "current", "", True, False),
+        ("question", "current", "slots", False, False),
+    ],
+)
+def test_reveal_completion_shows_rating_only_for_the_current_question(
+    side, render_request, manifest, action_allowed, expected
+):
+    controller = WeakReview.__new__(WeakReview)
+    controller.token = "current-card"
+    controller.request = "current"
+    controller.manifest = manifest
+    controller.current = Mock(
+        side_effect=lambda token, action=False: not action or action_allowed
+    )
+    panel = SimpleNamespace(owner=Mock())
+    controller.reviewer = SimpleNamespace(
+        state=side, review_panel=lambda: panel, _getTypedAnswer=Mock()
+    )
+    controller.change = Mock()
+    controller.receive(
+        json.dumps(
+            {
+                "kind": "revealComplete",
+                "token": controller.token,
+                "request": render_request,
+            }
+        )
+    )
+    assert controller.reviewer._getTypedAnswer.called is expected
+    if expected:
+        panel.owner.activate.assert_called_once_with(panel)
+    controller.change.assert_not_called()
+
+
+def test_stale_reveal_completion_cannot_flip_the_next_card():
+    controller = WeakReview.__new__(WeakReview)
+    controller.current = Mock(return_value=False)
+    controller.reviewer = Mock()
+    controller.receive('{"kind":"revealComplete","token":"old-card","request":"old"}')
+    controller.reviewer._getTypedAnswer.assert_not_called()
+    controller.reviewer.review_panel.assert_not_called()

@@ -27,6 +27,7 @@
     let activeMark = null;
     let hoveredEntry = null;
     let hideMarkTimer = null;
+    let answerRequested = false;
     const requestPrefix = Math.random().toString(36).slice(2);
     const TYPE = "anki-weak-review-v1";
     const allowedOrigin = (origin) => origin === location.origin || origin === "https://kyxz288.com";
@@ -109,6 +110,7 @@
         inlineHost = null;
         localBinding = null;
         currentRequest = null;
+        answerRequested = false;
     }
     function style() {
         if (document.getElementById("anki-wr-style")) { return; }
@@ -270,7 +272,7 @@
         entry.button = button;
         return button;
     }
-    function render() {
+    function render(revealAction = false) {
         if (!active) { return; }
         for (const entry of entries) {
             const remembered = known.has(entry.key);
@@ -312,6 +314,15 @@
         const focused = entries.find(entry => entry.el === document.activeElement);
         if (hoveredEntry || focused) { showMark(hoveredEntry || focused); }
         positionMark();
+        // Only a reveal action may finish the question. Loading saved marks or
+        // repainting a template must not flip a card or count as remembering it.
+        if (
+            revealAction && config.side === "question" && !answerRequested && entries.length
+            && entries.every(entry => revealed.has(entry.key) || (!full && known.has(entry.key)))
+        ) {
+            answerRequested = true;
+            notify({ kind: "revealComplete" });
+        }
     }
     function activateNative() {
         if (document.querySelector("#qa #enhanced-cloze-content, #qa .answers span.aswk")) { return false; }
@@ -349,7 +360,7 @@
                 event.stopImmediatePropagation();
                 if (revealed.has(entry.key)) { revealed.delete(entry.key); }
                 else { revealed.add(entry.key); }
-                render();
+                render(true);
             }, true);
             cleanup.push(() => {
                 entry.el.innerHTML = entry.original;
@@ -469,7 +480,7 @@
                     event.stopImmediatePropagation();
                     if (revealed.has(entry.key)) { revealed.delete(entry.key); }
                     else { revealed.add(entry.key); }
-                    render();
+                    render(true);
                 }, true);
             }
         }
@@ -477,7 +488,7 @@
             const next = () => {
                 const entry = entries.find(item => !revealed.has(item.key) && (full || !known.has(item.key)));
                 if (entry) { revealed.add(entry.key); }
-                render();
+                render(true);
             };
             const hide = () => {
                 const last = [...entries].reverse().find(item => revealed.has(item.key));
@@ -505,7 +516,7 @@
                 if (!entry) { return found.toggle.apply(this, arguments); }
                 if (option === "answer" || (option === "toggle" && !found.shown(target))) { revealed.add(entry.key); }
                 else if (option === "hint" || option === "toggle") { revealed.delete(entry.key); }
-                render();
+                render(true);
             };
             localBinding.nativeToggle = found.toggle;
             localBinding.wrappedToggle = wrapped;
@@ -762,7 +773,7 @@
                 event.stopImmediatePropagation();
                 if (revealed.has(entry.key)) { revealed.delete(entry.key); }
                 else { revealed.add(entry.key); }
-                render();
+                render(true);
             };
             listen(found.table ? entry.el.parentElement : entry.el, "click", reveal);
             listen(entry.el, "keydown", event => {
@@ -777,7 +788,7 @@
                 event.stopImmediatePropagation();
                 const entry = entries.find(item => !revealed.has(item.key) && (full || !known.has(item.key)));
                 if (entry) { revealed.add(entry.key); }
-                render();
+                render(true);
             }, true);
         }
         notify({
@@ -870,7 +881,7 @@
                 event.stopImmediatePropagation();
                 if (revealed.has(entry.key)) { revealed.delete(entry.key); }
                 else { revealed.add(entry.key); }
-                render();
+                render(true);
             }, true);
             cleanup.push(() => {
                 delete entry.el.dataset.wrHidden;
@@ -884,7 +895,7 @@
             event.stopImmediatePropagation();
             const next = entries.find(entry => !revealed.has(entry.key) && (full || !known.has(entry.key)));
             if (next) { revealed.add(next.key); }
-            render();
+            render(true);
         };
         listen(container, "click", revealNext, true);
         const nextButton = container.parentElement.querySelector(".showanswer");

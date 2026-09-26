@@ -207,6 +207,86 @@ def snapshot():
     )
 
 
+def finish_revealing(reviewer, label, *, in_frame=False, next_action=None):
+    baseline = snapshot()
+    known = list(reviewer.weak_review.value["known"])
+
+    def evaluate(source):
+        return js(reviewer.web, source, in_frame=in_frame)
+
+    def concealed():
+        return evaluate(
+            "[...document.querySelectorAll('.anki-wr-mark:disabled')].map(b=>b.dataset.wrKey)"
+        )
+
+    keys = concealed()
+    assert len(keys) > 1
+
+    def reveal(key):
+        evaluate(
+            f"document.querySelector('[data-wr-key={key}]').previousElementSibling.click()"
+        )
+
+    for key in keys[:-1]:
+        reveal(key)
+    wait(lambda: len(concealed()) == 1)
+    check(
+        label + " keeps the question until the final reveal",
+        reviewer.state == "question",
+    )
+    reveal(keys[0])
+    wait(lambda: len(concealed()) == 2)
+    reveal(keys[0])
+    wait(lambda: len(concealed()) == 1)
+    panel = reviewer.review_panel()
+    other = next(p for p in panel.owner.panels if p is not panel) if panel else None
+    other_state = (other.reviewer.card.id, other.reviewer.state) if other else None
+    if other:
+        panel.owner.activate(other)
+    if next_action:
+        evaluate(next_action)
+    else:
+        reveal(keys[-1])
+    wait(lambda: reviewer.state == "answer" and ready(reviewer))
+    wait(
+        lambda: (
+            evaluate("document.querySelectorAll('.anki-wr-mark').length")
+            == len(reviewer.weak_review.slots)
+            and not concealed()
+        )
+    )
+    wait(
+        lambda: js(
+            reviewer.bottom.web,
+            "document.querySelectorAll('button[data-ease]').length > 0"
+            + (
+                " && document.body.innerText.includes('逐空评分')"
+                if not reviewer.weak_review.full
+                else ""
+            ),
+        )
+    )
+    check(
+        label + " final reveal shows rating without remembering or scheduling",
+        reviewer.weak_review.value["known"] == known and snapshot() == baseline,
+    )
+    if other:
+        check(
+            label + " flips only the interacted pane",
+            panel.owner.active is panel
+            and (other.reviewer.card.id, other.reviewer.state) == other_state,
+        )
+    if label in ("native", "custom-text"):
+        evaluate(
+            "requestAnimationFrame(()=>requestAnimationFrame(()=>window.revealPaintReady=true))"
+        )
+        wait(lambda: evaluate("window.revealPaintReady===true"))
+        mw.grab().save(str(BASE / f"auto-answer-{label}.png"))
+    show_question(reviewer)
+    wait(lambda: concealed() == keys)
+    check(label + " question redraw does not auto-flip", reviewer.state == "question")
+
+
 def image_bytes(revision=0):
     if revision == 2:
         return b"invalid synthetic image"
@@ -505,6 +585,7 @@ try:
         )
         show_question(reviewer)
         wait(lambda: hidden(reviewer) == 9)
+        finish_revealing(reviewer, "native")
         check(
             "one marked slot stays visible with the table intact",
             js(reviewer.web, "document.querySelectorAll('#qa table tr').length") == 11,
@@ -516,6 +597,7 @@ try:
         wait(lambda: hidden(reviewer) == 6)
         reviewer.weak_review.toggle_full(True)
         wait(lambda: hidden(reviewer) == 10)
+        finish_revealing(reviewer, "full-test")
         check(
             "full test preserves saved marks",
             len(reviewer.weak_review.value["known"]) == 4,
@@ -658,6 +740,12 @@ try:
                 "document.querySelector('.svg_background-image img').src.startsWith('data:image/svg+xml;base64,')"
             ),
         )
+        finish_revealing(
+            image_reviewer,
+            "svg",
+            in_frame=True,
+            next_action="document.querySelector('.showanswer').click()",
+        )
         check(
             "empty image region consumes no recall slot",
             frame_js(
@@ -735,6 +823,14 @@ try:
             "nine custom text slots detected",
             len(image_reviewer.weak_review.slots) == 9,
         )
+        finish_revealing(
+            image_reviewer,
+            "custom-text",
+            in_frame=True,
+            next_action="document.querySelector('.showanswer').click()",
+        )
+        cross_origin_frame(image_reviewer)
+        wait(lambda: text_hidden() == 9)
         frame_js("document.querySelector('[data-wr-inline]').click()")
         wait(lambda: text_hidden() == 8)
         check(
@@ -925,6 +1021,7 @@ try:
         wait(lambda: table_hidden() == 9)
         before_table_marks = snapshot()
         check("nine table cells detected", len(image_reviewer.weak_review.slots) == 9)
+        finish_revealing(image_reviewer, "table", in_frame=True)
         frame_js("document.querySelector('.anki-wr-table-host td').click()")
         wait(lambda: table_hidden() == 8)
         check(
@@ -1129,6 +1226,13 @@ try:
                 local.weak_review.value["known"] == ["s0", "s2"],
             )
             check(kind + " local actions do not reschedule", snapshot() == baseline)
+            finish_revealing(
+                local,
+                kind,
+                next_action="document.getElementById('showButton').click()"
+                if kind == "studio"
+                else None,
+            )
             local.weak_review.toggle(False)
             wait(
                 lambda: (

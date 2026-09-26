@@ -316,6 +316,17 @@ class WeakReview:
             kind = data.get("kind")
             if kind == "manifest":
                 self.accept_manifest(data)
+            elif kind == "revealComplete":
+                if (
+                    data.get("request") != self.request
+                    or not self.manifest
+                    or self.reviewer.state != "question"
+                ):
+                    return
+                if panel := self.reviewer.review_panel():
+                    panel.owner.activate(panel)
+                if self.current(self.token, action=True):
+                    self.reviewer._getTypedAnswer()
             elif kind == "mark":
                 if data.get("request") != self.request:
                     return
