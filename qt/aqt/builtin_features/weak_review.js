@@ -8,6 +8,7 @@
     let config = null;
     let entries = [];
     let known = new Set();
+    let difficulty = {};
     let revealed = new Set();
     let cleanup = [];
     let manifest = "";
@@ -31,11 +32,64 @@
         const data = { ...payload, token: config?.token };
         if (data.kind === "manifest" && data.request === undefined) {
             currentRequest = `${requestPrefix}:${++requestSequence}`;
+            data.details = slotDetails(data);
         }
         if (data.request === undefined) { data.request = currentRequest; }
         if (child) { window.parent.postMessage({ type: TYPE, command: data }, "*"); }
         else if (typeof window.pycmd === "function") { window.pycmd("weakReview:" + JSON.stringify(data)); }
     };
+    const plain = html => {
+        const root = new DOMParser().parseFromString(html || "", "text/html");
+        root.querySelectorAll("script,style,template,.anki-wr-mark").forEach(el => el.remove());
+        return root.body.textContent.replace(/\s+/g, " ").trim();
+    };
+    function slotDetails(data) {
+        const parts = data.slots.map(slot => JSON.parse(slot));
+        const answers = parts.map(part =>
+            data.adapter === "mumu-svg-v1" ? "" : plain(part[data.adapter === "enhanced-cloze-v1" ? 2 : 1])
+        );
+        const heading = plain(document.querySelector(".flex-q-clz, #qa .question")?.innerHTML || "").slice(0, 1600);
+        return parts.map((part, i) => {
+            const marker = `【待回忆空格 ${i + 1}】`;
+            let context = heading;
+            if (data.adapter === "mumu-text-v1") {
+                context += "\n"
+                    + data.identity[3].map((p, index) =>
+                        typeof p === "string" ? plain(p) : index === part[0] ? marker : plain(p[0])
+                    ).join("");
+            } else if (data.adapter === "mumu-table-v1") {
+                const [r, c] = part[0], rows = data.identity[3];
+                context += `\n行：${plain(rows[r][0])}；列：${plain(rows[0][c])}；${marker}\n同一行：`
+                    + rows[r].map((cell, col) => col === c ? marker : plain(cell)).join(" | ");
+            } else if (data.adapter === "native-cloze-v1") {
+                const root = new DOMParser().parseFromString(config.question, "text/html");
+                root.querySelectorAll("span.cloze[data-cloze]").forEach((el, j) =>
+                    el.textContent = j === i ? marker : answers[j]
+                );
+                context = plain(root.body.innerHTML);
+            } else if (data.adapter === "aswk-v1" || data.adapter === "enhanced-cloze-v1") {
+                const host = document.querySelector(
+                    data.adapter === "aswk-v1" ? "#qa .answers .content" : "#qa #enhanced-clozes",
+                )?.cloneNode(true);
+                if (host) {
+                    host.querySelectorAll(data.adapter === "aswk-v1" ? ".aswk" : ".genuine-cloze").forEach((el, j) =>
+                        el.textContent = j === i ? marker : answers[j]
+                    );
+                    context += "\n" + plain(host.innerHTML);
+                }
+            }
+            const position = context.indexOf(marker);
+            const start = Math.max(0, position - 1600);
+            const excerpt = context.slice(start, start + 4000);
+            return {
+                key: `s${i}`,
+                answer: answers[i],
+                context: excerpt,
+                context_excerpt: excerpt.length < context.length,
+                region: data.adapter === "mumu-svg-v1" ? part : null,
+            };
+        });
+    }
     function restore() {
         observer?.disconnect();
         observer = null;
@@ -61,6 +115,9 @@
               font:13px/1 sans-serif;border:1px solid #608876;border-radius:50%;
               background:#f3fff8;color:#235c3d;vertical-align:middle;cursor:pointer; }
             .anki-wr-mark[aria-pressed="true"] { background:#286c49;color:white; }
+            .anki-wr-mark[data-wr-level="留意"] { border:2px solid #b58113;box-shadow:0 0 0 2px #f5dfa2; }
+            .anki-wr-mark[data-wr-level="重点"] { border:2px solid #b84727;box-shadow:0 0 0 3px #f2c4ad; }
+            .anki-wr-region-mark[data-wr-level="重点"], .anki-wr-region-mark[data-wr-level="留意"] { opacity:1; }
             .anki-wr-mark:disabled { opacity:.45;cursor:default; }
             .anki-wr-mark:focus-visible { outline:2px solid #328be0;outline-offset:2px; }
             [data-wr-hidden="true"] { background:#bed8cd!important;border:1px solid #648c7d!important;
@@ -130,6 +187,13 @@
             entry.button.disabled = !visible;
             entry.button.setAttribute("aria-pressed", String(remembered));
             entry.button.title = remembered ? "已记住；点击重新加入复习" : "标记为本轮已记住";
+            const info = difficulty[entry.key];
+            if (info) {
+                entry.button.dataset.wrLevel = info.level;
+                entry.button.title += `；${info.level} · 本轮 ${info.attempts} 次 · 近期难度 ${
+                    Math.round(info.score * 100)
+                }/100`;
+            }
             entry.button.setAttribute("aria-label", `空格 ${entry.index + 1}：${entry.button.title}`);
         }
     }
@@ -746,6 +810,7 @@
         restore();
         config = value;
         known = new Set();
+        difficulty = {};
         revealed = new Set();
         full = value.full;
         activeFrame = null;
@@ -791,6 +856,7 @@
         for (const key of known) { if (!value.known.includes(key)) { revealed.delete(key); } }
         full = value.full;
         known = new Set(value.known);
+        difficulty = value.difficulty || {};
         if (value.image && originalImage) {
             const probe = new Image();
             const loaded = await new Promise(resolve => {

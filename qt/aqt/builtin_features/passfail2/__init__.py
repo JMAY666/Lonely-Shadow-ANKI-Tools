@@ -73,7 +73,11 @@ def answer_buttons(buttons: tuple, reviewer: Any, value: dict) -> tuple:
 
 def remap_answer(result: tuple, reviewer: Any, value: dict) -> tuple:
     proceed, ease = result
-    if value["enabled"] and ease != 1:
+    if (
+        value["enabled"]
+        and ease != 1
+        and not getattr(getattr(reviewer, "weak_review", None), "auto_rating", False)
+    ):
         return (proceed, reviewer._defaultEase())
     return result
 

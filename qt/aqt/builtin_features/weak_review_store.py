@@ -37,14 +37,23 @@ class RecallStore:
             "create table if not exists rounds (card integer, schedule text, "
             "source text, manifest text, value text, primary key(card,schedule))"
         )
+        db.execute(
+            "create table if not exists recall_visits (card integer, schedule text, "
+            "source text, manifest text, value text, primary key(card,schedule,source,manifest))"
+        )
         return db
 
     def load(self, card: int, schedule: str, source: str, manifest: str) -> dict:
         with closing(self._connect()) as db:
             row = db.execute(
-                "select source,manifest,value from rounds where card=? and schedule=?",
-                (card, schedule),
+                "select source,manifest,value from recall_visits where card=? and schedule=? and source=? and manifest=?",
+                (card, schedule, source, manifest),
             ).fetchone()
+            if row is None:
+                row = db.execute(
+                    "select source,manifest,value from rounds where card=? and schedule=?",
+                    (card, schedule),
+                ).fetchone()
         if row and row[:2] == (source, manifest):
             value = json.loads(row[2])
             if (
@@ -66,15 +75,15 @@ class RecallStore:
     ) -> None:
         with closing(self._connect()) as db, db:
             db.execute(
-                "insert into rounds values(?,?,?,?,?) on conflict(card,schedule) "
-                "do update set source=excluded.source,manifest=excluded.manifest,value=excluded.value",
+                "insert into recall_visits values(?,?,?,?,?) on conflict(card,schedule,source,manifest) "
+                "do update set value=excluded.value",
                 (card, schedule, source, manifest, json.dumps(value)),
             )
             # Native undo/redo restores the old schedule key and thus the old round.
             # Keep more versions than Anki's undo limit, without growing indefinitely.
             db.execute(
-                "delete from rounds where card=? and rowid not in "
-                "(select rowid from rounds where card=? order by rowid desc limit 64)",
+                "delete from recall_visits where card=? and rowid not in "
+                "(select rowid from recall_visits where card=? order by rowid desc limit 64)",
                 (card, card),
             )
 

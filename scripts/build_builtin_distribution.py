@@ -39,6 +39,10 @@ required = [
     "aqt/builtin_features/weak_review.py",
     "aqt/builtin_features/weak_review_store.py",
     "aqt/builtin_features/weak_review.js",
+    "aqt/builtin_features/weak_review_insights.py",
+    "aqt/builtin_features/weak_review_dashboard.py",
+    "aqt/builtin_features/weak_review_report.py",
+    "aqt/builtin_features/weak_review_ai.py",
     "aqt/builtin_features/dual_review.py",
     "aqt/builtin_features/synapsepro/media/dual_review.svg",
     "aqt/builtin_features/desktop_tools/__init__.py",
@@ -76,7 +80,7 @@ from verify_web_runtime import verify
 verify(packages / "_aqt/data/web/sveltekit")
 assert not (destination / "addons21").exists()
 manifest = {
-    "weak_review": "4: per-slot recall for native clozes, Studio aswk, Enhanced Cloze, supported webpage text, table cells and SVG masks; guarded asynchronous rendering, native learning boundaries, undo and restart persistence",
+    "weak_review": "5: per-slot attempt counts, recent adaptive difficulty, native automatic rating, deck-scoped daily and comprehensive AI reports, PDF/HTML/Markdown export, local scheduled slot exercises, undo and restart persistence",
     "dual_review": "1: two native review panels, shared scheduler and revlog, exclusive reservations, active-pane shortcuts and audio, global undo, compact tabs",
     "desktop_tools": "Minimize to Tray 2 0.2; AnkiPenDown 1.1; native lifecycle and Simplified Chinese settings",
     "edition": "Anki 26.8.1 with built-in SynapsePro, FSRS Helper and Pass/Fail 2",

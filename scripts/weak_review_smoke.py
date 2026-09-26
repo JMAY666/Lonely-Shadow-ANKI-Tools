@@ -1130,6 +1130,11 @@ try:
                 reviewer.weak_review.value["known"] == ["s0", "s2"],
             )
 
+    if os.environ.get("ANKI_WEAK_INSIGHTS_SMOKE") == "1":
+        from weak_insights_smoke import run_checks
+
+        run_checks(globals())
+
     mw.dual_review.stop()
     mw.learning_workspace.profile_close()
     mw.col.close()

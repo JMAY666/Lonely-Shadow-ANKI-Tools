@@ -9,19 +9,22 @@ import base64
 import hashlib
 import json
 import sqlite3
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from aqt.qt import QCursor, QMenu, QWebEngineScript
+from aqt.qt import QAction, QCursor, QMenu, QTimer, QWebEngineScript
 from aqt.utils import showWarning, tooltip
 
+from .weak_review_insights import InsightStore, begin_visit, burden, level, slot_scores
 from .weak_review_store import RecallStore, continues_round, digest
 
 IMAGE_HOST = "mumu-anki-pic.oss-cn-hangzhou.aliyuncs.com"
 SETTING = "weakReviewEnabled"
+AUTO_SETTING = "weakReviewAutoPass"
 STORAGE_ERRORS = (OSError, ValueError, sqlite3.Error)
 
 
@@ -110,6 +113,8 @@ class WeakReview:
         self.asset_cache: dict[str, tuple[str, str]] = {}
         self.pending_manifest = ""
         self.request: str | None = None
+        self.auto_pending: tuple | None = None
+        self.auto_rating = False
         script = QWebEngineScript()
         script.setName("anki-weak-review")
         script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentReady)
@@ -122,6 +127,11 @@ class WeakReview:
         controllers = getattr(self.mw, "_weak_review_controllers", [])
         controllers.append(self)
         self.mw._weak_review_controllers = controllers
+        if not getattr(self.mw, "_weak_review_insights_action", None):
+            action = QAction("逐空薄弱项 · 总结与专项练习…", self.mw)
+            action.triggered.connect(self.dashboard)
+            self.mw.form.menuTools.addAction(action)
+            self.mw._weak_review_insights_action = action
 
     @property
     def enabled(self) -> bool:
@@ -130,6 +140,14 @@ class WeakReview:
     @property
     def store(self) -> RecallStore:
         return RecallStore(Path(self.mw.pm.profileFolder()) / "weak-review.sqlite3")
+
+    @property
+    def insights(self) -> InsightStore:
+        return InsightStore(self.store.path)
+
+    @property
+    def auto_pass(self) -> bool:
+        return bool(self.mw.pm.profile.get(AUTO_SETTING, True))
 
     def show(self) -> None:
         reviewer = self.reviewer
@@ -140,6 +158,7 @@ class WeakReview:
         if (self.card_id, getattr(self, "schedule", None)) != (card.id, schedule):
             self.full = False
             self.asset_cache.clear()
+            self.auto_pending = None
         if reviewer.state == "question":
             self.asset_cache.clear()
         self.card_id = card.id
@@ -190,7 +209,7 @@ class WeakReview:
 
     def receive(self, command: str) -> None:
         try:
-            if len(command) > 300_000:
+            if len(command) > 1_000_000:
                 return
             data = json.loads(command)
             if not isinstance(data, dict) or not self.current(data.get("token", "")):
@@ -257,7 +276,39 @@ class WeakReview:
                 self.value["known"] = [
                     key for key in self.value["known"] if key in self.slots
                 ]
+                if not self.full:
+                    value = begin_visit(self.value, self.schedule, self.slots)
+                    if value != self.value:
+                        self.store.save(
+                            self.card_id,
+                            self.schedule,
+                            self.source,
+                            self.manifest,
+                            value,
+                        )
+                        self.value = value
+                details = data.get("details")
+                if (
+                    isinstance(details, list)
+                    and len(details) == len(slots)
+                    and all(
+                        isinstance(item, dict)
+                        and item.get("key") == self.slots[i]
+                        and isinstance(item.get("answer"), str)
+                        and isinstance(item.get("context"), str)
+                        and len(item["answer"]) <= 20000
+                        and len(item["context"]) <= 5000
+                        for i, item in enumerate(details)
+                    )
+                ):
+                    metadata = {"slots": details, "asset": asset[0] if asset else None}
+                    self.insights.catalog(
+                        self.card_id, self.source, self.manifest, metadata, asset
+                    )
                 self.publish(asset[1] if asset else None)
+                if getattr(self, "auto_pending", None):
+                    auto_pending = self.auto_pending
+                    QTimer.singleShot(450, lambda: self.submit_auto(auto_pending))
             except STORAGE_ERRORS as exc:
                 self.fail(str(exc))
 
@@ -299,6 +350,7 @@ class WeakReview:
         if known == self.value["known"]:
             return
         value = {
+            **self.value,
             "known": known,
             "history": (self.value["history"] + [self.value["known"]])[-30:],
         }
@@ -306,7 +358,93 @@ class WeakReview:
         self.value = value
         self.publish()
         if len(known) == len(self.slots):
-            tooltip("本轮空格已全部记住，请按实际表现正常评分。", parent=self.mw)
+            self.queue_auto()
+        else:
+            self.auto_pending = None
+
+    def queue_auto(self) -> None:
+        if not self.auto_pass or self.full:
+            tooltip("本轮空格已全部记住，可按实际表现评分。", parent=self.mw)
+            return
+        result = burden(self.value.get("attempts", {}), self.value["known"])
+        pending = (
+            self.card_id,
+            self.schedule,
+            self.source,
+            self.manifest,
+            result["rating"],
+            uuid.uuid4().hex,
+            time.monotonic() + 15,
+        )
+        self.auto_pending = pending
+        tooltip(
+            f"全部记住 · 自动{'困难' if pending[4] == 2 else '良好'}；可用 Anki 撤销评分。",
+            parent=self.mw,
+        )
+        if self.reviewer.state == "question":
+            self.reviewer._showAnswer()
+        else:
+            QTimer.singleShot(450, lambda: self.submit_auto(pending))
+
+    def submit_auto(self, pending: tuple) -> None:
+        if self.auto_pending != pending:
+            return
+        if (
+            not self.auto_pass
+            or self.full
+            or not self.current(self.token, action=True)
+            or self.reviewer.state != "answer"
+            or (self.card_id, self.schedule, self.source, self.manifest) != pending[:4]
+            or set(self.value["known"]) != set(self.slots)
+        ):
+            self.auto_pending = None
+            return
+        if not self.reviewer._states_mutated:
+            if time.monotonic() < pending[6]:
+                QTimer.singleShot(100, lambda: self.submit_auto(pending))
+            else:
+                self.auto_pending = None
+                tooltip("调度计算尚未完成，请稍后手动评分。", parent=self.mw)
+            return
+        self.auto_pending = None
+        self.auto_rating = True
+        try:
+            self.reviewer._answerCard(pending[4])
+        finally:
+            self.auto_rating = False
+
+    def difficulty(self) -> dict:
+        valid = set(
+            self.mw.col.db.list("select id from revlog where cid=?", self.card_id)
+        )
+        events = self.insights.events(self.card_id, self.source, self.manifest, valid)
+        current = {
+            "session": self.value.get("session", self.schedule),
+            "attempts": self.value.get("attempts", {}),
+            "known": self.value["known"],
+        }
+        # An unanswered visit is not a failure. Live highlighting adds repeated
+        # exposure only; a first display cannot make every blank a weak point.
+        current["known"] = self.slots
+        native_events = events
+        if max(current["attempts"].values(), default=0) > 1:
+            events = events + [current]
+        scores = slot_scores(events, self.slots)
+        for key, stats in scores.items():
+            last_native = max(
+                (e["at"] for e in native_events if key in e.get("tested", [])),
+                default=0,
+            )
+            for practice in self.insights.practices(
+                self.card_id, self.source, self.manifest, key
+            ):
+                if practice["at"] > last_native:
+                    stats["score"] = 0.35 * stats["score"] + (
+                        0 if practice["remembered"] else 0.65
+                    )
+            stats["level"] = level(stats["score"])
+            stats["attempts"] = self.value.get("attempts", {}).get(key, 0)
+        return scores
 
     def publish(self, image: str | None = None) -> None:
         payload = {
@@ -315,9 +453,11 @@ class WeakReview:
             "full": self.full,
             "image": image,
             "request": self.request,
+            "difficulty": self.difficulty(),
         }
         self.reviewer.web.eval(f"window.ankiWeakReview?.apply({json.dumps(payload)});")
-        self.status = f"本轮已记住 {len(self.value['known'])}/{len(self.slots)}；查看答案不等于记住"
+        score = burden(self.value.get("attempts", {}), self.value["known"])
+        self.status = f"本轮已记住 {len(self.value['known'])}/{len(self.slots)}；最多测试 {score['peak']} 次 · 本轮负担 {score['score']}/100"
         self.update_button()
 
     def update_button(self) -> None:
@@ -359,6 +499,11 @@ class WeakReview:
         reset.setEnabled(bool(self.manifest and self.value["known"]))
         reset.triggered.connect(self.reset)
         menu.addSeparator()
+        auto = menu.addAction("全部勾选后自动通过（按本轮表现评分）")
+        auto.setCheckable(True)
+        auto.setChecked(self.auto_pass)
+        auto.triggered.connect(self.toggle_auto)
+        menu.addAction("薄弱项总结与单空专项练习…", self.dashboard)
         menu.addAction("支持范围与轮次说明", self.help)
         menu.exec(QCursor.pos())
 
@@ -371,6 +516,7 @@ class WeakReview:
 
     def toggle_full(self, full: bool) -> None:
         if self.current(self.token, action=True) and self.manifest:
+            self.auto_pending = None
             self.full = full
             if full and self.reviewer.state == "answer":
                 self.reviewer._showQuestion()
@@ -380,6 +526,7 @@ class WeakReview:
     def undo_mark(self) -> None:
         if self.current(self.token, action=True) and self.value["history"]:
             value = {
+                **self.value,
                 "known": self.value["history"][-1],
                 "history": self.value["history"][:-1],
             }
@@ -388,6 +535,7 @@ class WeakReview:
                     self.card_id, self.schedule, self.source, self.manifest, value
                 )
                 self.value = value
+                self.auto_pending = None
                 self.publish()
             except STORAGE_ERRORS as exc:
                 self.fail(str(exc))
@@ -407,19 +555,58 @@ class WeakReview:
             card = self.mw.col.get_card(self.card_id)
             if card_identity(card) != self.source:
                 return
+            revlog = self.mw.col.db.scalar(
+                "select max(id) from revlog where cid=?", self.card_id
+            )
+            if revlog and self.value.get("attempts") and not self.full:
+                self.insights.record(
+                    self.card_id,
+                    self.source,
+                    self.manifest,
+                    revlog,
+                    {
+                        "session": self.value.get("session", self.schedule),
+                        "attempts": self.value["attempts"],
+                        "tested": self.value.get("tested", []),
+                        "known": self.value["known"],
+                        "at": int(time.time()),
+                        "rating": int(answer.rating),
+                        "burden": burden(self.value["attempts"], self.value["known"]),
+                    },
+                )
             self.store.advance(
                 self.card_id,
                 schedule_identity(card, self.mw.col),
                 self.source,
                 self.manifest,
                 self.value,
-                continues_round(answer.new_state),
+                continues_round(answer.new_state)
+                and len(self.value["known"]) < len(self.slots),
             )
         except STORAGE_ERRORS as exc:
             showWarning(
                 "评分已成功；逐空标记保存失败，下次将完整测试。\n" + str(exc),
                 parent=self.mw,
             )
+
+    def toggle_auto(self, enabled: bool) -> None:
+        self.mw.pm.profile[AUTO_SETTING] = enabled
+        self.mw.pm.save()
+        for controller in self.mw._weak_review_controllers:
+            controller.auto_pending = None
+
+    def dashboard(self) -> None:
+        if not self.mw.col:
+            return
+        from .weak_review_dashboard import InsightDialog
+
+        existing = getattr(self.mw, "_weak_insight_dialog", None)
+        if existing and existing.isVisible():
+            existing.raise_()
+            return
+        dialog = InsightDialog(self.mw, self.insights)
+        self.mw._weak_insight_dialog = dialog
+        dialog.show()
 
     def help(self) -> None:
         from aqt.utils import showInfo
@@ -432,7 +619,11 @@ class WeakReview:
             "重来／困难／良好／简单均仍使用原调度：评分后若处于学习或重学，保留本轮标记；"
             "毕业到正常间隔复习则结束本轮。普通复习的困难一般也会结束本轮；无重学步骤时重来也可能直接结束。"
             "关闭软件、跨天、切卡不清空；撤销评分恢复对应轮次。完整测试只临时忽略标记。\n\n"
-            "标记只保存在当前账户的 weak-review.sqlite3，不随 Anki 同步，不改变原卡、模板或学习记录。"
+            "全部勾选默认自动通过：最高测试次数≥3 或平均次数≥2 时为困难，否则良好；可在逐空菜单关闭。"
+            "全部记住后，下一学习步骤重新测试，避免沿用全部标记跳过复习。\n\n"
+            "橙色圆环为重点，黄色圆环为留意；悬停显示次数。工具菜单可查看每日/牌组总结并单空练习。"
+            "近期难度随新轮次升降；AI 仅在点击生成后读取当前列表中的上下文与原图。\n\n"
+            "本机记录保存在当前账户的 weak-review.sqlite3，不随 Anki 同步；自动评分使用原生调度和学习记录。"
             "内容、区域或图片版本改变后重新测试。筛选牌组暂不支持。",
             parent=self.mw,
         )

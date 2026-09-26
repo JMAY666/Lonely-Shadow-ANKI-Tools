@@ -43,6 +43,23 @@ def snapshot():
         )
     ) as db:
         marks = db.execute("select * from rounds order by card,schedule").fetchall()
+        tables = {
+            row[0]
+            for row in db.execute("select name from sqlite_master where type='table'")
+        }
+        if "recall_visits" in tables:
+            marks += db.execute(
+                "select * from recall_visits order by card,schedule,source,manifest"
+            ).fetchall()
+        for table in (
+            "recall_events",
+            "recall_catalog",
+            "recall_practice",
+            "recall_reports",
+            "recall_assets",
+        ):
+            if table in tables:
+                marks += db.execute(f"select * from {table} order by 1").fetchall()
     return cards, history, marks
 
 

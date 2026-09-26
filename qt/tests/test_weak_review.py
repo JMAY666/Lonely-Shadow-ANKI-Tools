@@ -163,10 +163,12 @@ def test_stale_frame_commands_do_not_mutate_marks():
     controller.change.assert_not_called()
 
 
-def test_all_marked_only_prompts_for_normal_rating(tmp_path, monkeypatch):
+def test_all_marked_with_auto_disabled_only_prompts_for_rating(tmp_path, monkeypatch):
     controller = WeakReview.__new__(WeakReview)
     controller.mw = SimpleNamespace(
-        pm=SimpleNamespace(profileFolder=lambda: str(tmp_path))
+        pm=SimpleNamespace(
+            profileFolder=lambda: str(tmp_path), profile={"weakReviewAutoPass": False}
+        )
     )
     controller.card_id, controller.schedule, controller.source, controller.manifest = (
         1,
@@ -181,7 +183,7 @@ def test_all_marked_only_prompts_for_normal_rating(tmp_path, monkeypatch):
     monkeypatch.setattr("aqt.builtin_features.weak_review.tooltip", prompt)
     controller.change(["s0"])
     prompt.assert_called_once()
-    assert "正常评分" in prompt.call_args.args[0]
+    assert "按实际表现评分" in prompt.call_args.args[0]
     assert controller.store.load(1, "s", "n", "m")["known"] == ["s0"]
 
 
@@ -197,6 +199,7 @@ def test_custom_text_manifest_restores_individual_marks_without_image_fetch(
     )
     controller.card_id, controller.schedule, controller.source = 1, "s", "n"
     controller.token, controller.pending_manifest = "t", ""
+    controller.full = False
     controller.current = Mock(return_value=True)
     controller.publish = Mock()
     manifest = {

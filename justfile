@@ -27,6 +27,21 @@ weak-review-format:
 weak-review-test:
     $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_weak_review.py qt/tests/test_review_undo.py qt/tests/test_review_shortcuts.py qt/tests/test_review_layout.py qt/tests/test_dual_review_api.py
 
+weak-insights-test:
+    $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_weak_review_insights.py qt/tests/test_weak_review.py qt/tests/test_ai_images.py qt/tests/test_review_undo.py qt/tests/test_review_shortcuts.py qt/tests/test_dual_review_api.py
+
+weak-insights-format:
+    & "out/pyenv/Scripts/ruff.exe" check --select I --fix qt/aqt/builtin_features/weak_review*.py qt/aqt/builtin_features/passfail2/__init__.py qt/tests/test_weak_review*.py scripts/weak_insights_smoke.py scripts/weak_insights_export.py
+    & "out/pyenv/Scripts/ruff.exe" format qt/aqt/builtin_features/weak_review*.py qt/aqt/builtin_features/passfail2/__init__.py qt/tests/test_weak_review*.py scripts/weak_insights_smoke.py scripts/weak_insights_export.py
+    & "node_modules/.bin/dprint.cmd" fmt qt/aqt/builtin_features/weak_review.js README.md docs/WEAK-REVIEW.md
+
+weak-insights-smoke run_name:
+    $env:QT_QPA_PLATFORM="offscreen"; & "out/pyenv/Scripts/python.exe" scripts/weak_insights_smoke.py {{run_name}}
+    $env:QT_QPA_PLATFORM="offscreen"; & "out/pyenv/Scripts/python.exe" scripts/weak_insights_smoke.py {{run_name}} verify
+
+weak-insights-export source_name output_name:
+    & "out/pyenv/Scripts/python.exe" scripts/weak_insights_export.py {{source_name}} {{output_name}}
+
 weak-review-smoke run_name:
     $env:QT_QPA_PLATFORM="offscreen"; & "out/pyenv/Scripts/python.exe" scripts/weak_review_smoke.py {{run_name}}
     $env:QT_QPA_PLATFORM="offscreen"; & "out/pyenv/Scripts/python.exe" scripts/weak_review_smoke.py {{run_name}} verify
