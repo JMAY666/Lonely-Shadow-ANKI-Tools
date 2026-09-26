@@ -6,6 +6,10 @@ mod release
 default:
     @just --list
 
+# Refresh the fixed local entry after a verified application delivery.
+anki-entry revision="" summary="" updated_at="":
+    & "scripts/install_anki_entry.ps1" -Revision '{{replace(revision, "'", "''")}}' -Summary '{{replace(summary, "'", "''")}}' -UpdatedAt '{{replace(updated_at, "'", "''")}}'
+
 focus-music-assets:
     & "out/pyenv/Scripts/python.exe" scripts/focus_music_assets.py
 
