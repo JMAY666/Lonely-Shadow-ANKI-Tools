@@ -1022,6 +1022,7 @@ try:
         continuation = mw.col.new_note(reviewer.card.note_type())
         continuation.fields[0] = "后续合成卡片 {{c1::继续}}"
         mw.col.add_note(continuation, expected["deck"])
+        reviewer.weak_review.toggle_full(True)
         show_answer(reviewer)
         round_manifest = reviewer.weak_review.manifest
         reviewer._answerCard(4)

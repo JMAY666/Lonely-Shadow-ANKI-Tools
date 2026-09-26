@@ -30,7 +30,7 @@ def begin_visit(value: dict, schedule: str, slots: list[str]) -> dict:
 def burden(attempts: dict[str, int], known: list[str]) -> dict:
     counts = list(attempts.values())
     if not counts:
-        return {"score": 0, "peak": 0, "mean": 0, "rating": 3}
+        return {"score": 0, "peak": 0, "mean": 0}
     mean, peak = sum(counts) / len(counts), max(counts)
     # This is a transparent local heuristic, not an FSRS difficulty estimate.
     score = round(100 * min(1, 0.6 * (mean - 1) / 3 + 0.4 * (peak - 1) / 3))
@@ -38,9 +38,6 @@ def burden(attempts: dict[str, int], known: list[str]) -> dict:
         "score": score,
         "peak": peak,
         "mean": round(mean, 2),
-        "rating": 2
-        if all(key in known for key in attempts) and (peak >= 3 or mean >= 2)
-        else 3,
     }
 
 
@@ -276,7 +273,7 @@ def collect_items(
             if practices and practices[-1]["at"] > last_native:
                 due = practices[-1]["due"]
             else:
-                due = latest["at"] + (86400 if score >= 0.6 else 3 * 86400)
+                due = latest["at"] + (600 if score >= 0.6 else 6 * 3600)
             # Daily reports retain today's struggled items even when later
             # learning in the day improved their current score.
             daily_failed = sum(key not in e["known"] for e in today)
@@ -306,6 +303,12 @@ def collect_items(
                     "day_practices": len(daily_practices),
                     "day_practice_misses": practice_failed,
                     "pending_confirmation": pending_confirmation,
+                    "round_quality": events[-1].get("quality")
+                    if events and events[-1].get("completed")
+                    else None,
+                    "card_next_days": events[-1].get("next_days")
+                    if events and events[-1].get("completed")
+                    else None,
                     "due": due,
                     "overdue": due <= now,
                 }
@@ -341,6 +344,8 @@ def report_batches(items: list[dict], limit: int = 14000) -> list[list[dict]]:
         public["image_region"] = bool(item.get("asset"))
         public["day_practices"] = item.get("day_practices", 0)
         public["day_practice_misses"] = item.get("day_practice_misses", 0)
+        public["round_quality"] = item.get("round_quality")
+        public["card_next_days"] = item.get("card_next_days")
         count = len(json.dumps(public, ensure_ascii=False))
         if batch and (size + count > limit or images + bool(item.get("asset")) > 4):
             batches.append(batch)

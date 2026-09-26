@@ -39,13 +39,13 @@ def test_four_blanks_count_only_unmastered_slots_and_survive_restart(tmp_path):
         store.save(1, schedule, "source", "manifest", value)
         value = InsightStore(store.path).load(1, schedule, "source", "manifest")
     assert value["attempts"] == {"s0": 2, "s1": 2, "s2": 3, "s3": 4}
-    assert burden(value["attempts"], keys)["rating"] == 2
+    assert burden(value["attempts"], keys)["score"] == 75
     assert store.load(1, "two", "source", "manifest")["attempts"] == dict.fromkeys(
         keys, 2
     )
     next_round = begin_visit({"known": [], "history": []}, "later", keys)
     assert next_round["attempts"] == dict.fromkeys(keys, 1)
-    assert burden(next_round["attempts"], keys)["rating"] == 3
+    assert burden(next_round["attempts"], keys)["score"] == 0
 
 
 def test_difficulty_can_reverse_and_old_weakness_can_retire():
@@ -318,7 +318,7 @@ def test_final_mark_submits_one_adaptive_rating_and_stale_timer_cannot_repeat(
     pending = controller.auto_pending
     controller.submit_auto(pending)
     controller.submit_auto(pending)
-    controller.reviewer._answerCard.assert_called_once_with(2)
+    controller.reviewer._answerCard.assert_called_once_with(3)
 
 
 @pytest.mark.parametrize("cancel", ["unmark", "full", "stale", "disabled"])
@@ -340,11 +340,11 @@ def test_auto_rating_is_canceled_by_new_user_state(tmp_path, monkeypatch, cancel
     controller.reviewer._answerCard.assert_not_called()
 
 
-def test_pass_fail_mode_preserves_only_explicit_automatic_rating():
+def test_pass_fail_mode_keeps_its_outcome_mapping_outside_the_round_policy():
     reviewer = SimpleNamespace(
         weak_review=SimpleNamespace(auto_rating=True), _defaultEase=lambda: 3
     )
-    assert remap_answer((True, 2), reviewer, {"enabled": True}) == (True, 2)
+    assert remap_answer((True, 2), reviewer, {"enabled": True}) == (True, 3)
     reviewer.weak_review.auto_rating = False
     assert remap_answer((True, 2), reviewer, {"enabled": True}) == (True, 3)
 
@@ -363,4 +363,4 @@ def test_auto_rating_waits_for_custom_scheduler_without_requiring_another_click(
     assert controller.auto_pending == pending
     controller.reviewer._states_mutated = True
     controller.submit_auto(pending)
-    controller.reviewer._answerCard.assert_called_once_with(2)
+    controller.reviewer._answerCard.assert_called_once_with(3)

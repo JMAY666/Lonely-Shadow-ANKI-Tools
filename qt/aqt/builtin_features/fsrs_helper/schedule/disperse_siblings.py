@@ -239,6 +239,12 @@ def disperse_siblings_background(
 
 
 def disperse_siblings_when_review(reviewer, card: Card, ease):
+    recall = getattr(reviewer, "weak_review", None)
+    if (recall and getattr(recall, "card_id", None) == card.id
+            and getattr(recall, "submitted_plan", None)):
+        # The per-slot round already chose the interval in the answer transaction.
+        # Automatic sibling dispersal must not overwrite it immediately afterward.
+        return
     if not mw.col.get_config("fsrs"):
         tooltip(t("enable-fsrs-warning"))
         return

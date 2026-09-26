@@ -71,7 +71,12 @@ def render_report(
             f"<h3>{index + 1:02d} · {escaped(item['deck'])} · 空格 {int(item['key'][1:]) + 1}</h3>"
             f"<p class='meta'>卡片 {item['card']} / {item['key']} · {item['rounds']} 轮记录 · 专项到期 {datetime.fromtimestamp(item['due']).strftime('%Y-%m-%d %H:%M')}</p>"
             f"<p class='meta'>当日专项练习 {item.get('day_practices', 0)} 次，其中未记住 {item.get('day_practice_misses', 0)} 次。</p>"
-            f"<p><b>上下文</b><br>{escaped(item['context'])}</p>"
+            + (
+                f"<p class='meta'>最近本轮表现分 {item['round_quality']}/100；整卡下次间隔 {item['card_next_days']} 天。</p>"
+                if item.get("card_next_days")
+                else ""
+            )
+            + f"<p><b>上下文</b><br>{escaped(item['context'])}</p>"
             + (
                 "<p class='meta'>显示目标附近的上下文节选。</p>"
                 if item.get("context_excerpt")

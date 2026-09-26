@@ -73,11 +73,7 @@ def answer_buttons(buttons: tuple, reviewer: Any, value: dict) -> tuple:
 
 def remap_answer(result: tuple, reviewer: Any, value: dict) -> tuple:
     proceed, ease = result
-    if (
-        value["enabled"]
-        and ease != 1
-        and not getattr(getattr(reviewer, "weak_review", None), "auto_rating", False)
-    ):
+    if value["enabled"] and ease != 1:
         return (proceed, reviewer._defaultEase())
     return result
 
@@ -131,10 +127,11 @@ def mode_selector(mw: Any) -> QComboBox:
     control: PassFailController = mw.passfail2
     selector = QComboBox()
     selector.setAccessibleName("复习评分模式")
-    selector.addItem("原生四档评分", False)
-    selector.addItem("通过／失败两档评分", True)
+    selector.addItem("常规卡 · 原生四档评分", False)
+    selector.addItem("常规卡 · 通过／失败两档评分", True)
     selector.setToolTip(
-        "两档模式：1=失败（重来）；2=通过（良好）。3、4 不评分；空格或 Enter 仅在正面显示答案。"
+        "此设置用于完整测试、关闭逐空和未适配的卡片。逐空模式使用“再练未掌握／完成本轮”。"
+        "常规两档模式：1=失败；2=通过；3、4 不评分；空格或 Enter 仅在正面显示答案。"
     )
 
     def sync() -> None:

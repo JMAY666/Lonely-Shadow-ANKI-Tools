@@ -20,6 +20,7 @@ from aqt.qt import QAction, QCursor, QMenu, QTimer, QWebEngineScript
 from aqt.utils import showWarning, tooltip
 
 from .weak_review_insights import InsightStore, begin_visit, burden, level, slot_scores
+from .weak_review_schedule import apply_round_schedule, round_plan
 from .weak_review_store import RecallStore, continues_round, digest
 
 IMAGE_HOST = "mumu-anki-pic.oss-cn-hangzhou.aliyuncs.com"
@@ -114,7 +115,7 @@ class WeakReview:
         self.pending_manifest = ""
         self.request: str | None = None
         self.auto_pending: tuple | None = None
-        self.auto_rating = False
+        self.submitted_plan: dict | None = None
         script = QWebEngineScript()
         script.setName("anki-weak-review")
         script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentReady)
@@ -185,6 +186,104 @@ class WeakReview:
             f"_queueAction(() => window.ankiWeakReview?.start({json.dumps(config)}));"
         )
         self.update_button()
+        if reviewer.state == "answer":
+            reviewer._showEaseButtons()
+
+    def controls_round(self) -> bool:
+        card = self.reviewer.card
+        return bool(
+            self.manifest
+            and self.enabled
+            and not self.full
+            and card
+            and card.id == self.card_id
+            and not card.odid
+        )
+
+    def plan(self) -> dict:
+        valid = set(
+            self.mw.col.db.list("select id from revlog where cid=?", self.card_id)
+        )
+        events = self.insights.events(self.card_id, self.source, self.manifest, valid)
+        config = self.mw.col.decks.config_dict_for_deck_id(
+            self.reviewer.card.current_deck_id()
+        )
+        card = self.reviewer.card
+        baseline = (
+            {"next_days": card.ivl, "at": max(valid, default=0) // 1000}
+            if card.type == 2 and card.ivl > 0
+            else None
+        )
+        return round_plan(
+            self.value,
+            self.slots,
+            events,
+            int(time.time()),
+            int(config.get("rev", {}).get("maxIvl", 36500)),
+            native_baseline=baseline,
+        )
+
+    def normalize_rating(self, ease: int) -> int | None:
+        self.submitted_plan = None
+        if not self.controls_round():
+            return ease
+        if not self.current(self.token, action=True):
+            return None
+        complete = set(self.value["known"]) == set(self.slots)
+        if ease != 1 and not complete:
+            tooltip("还有未记住的空，请标记掌握项后点击“再练未掌握”。", parent=self.mw)
+            return None
+        if ease == 1 and complete:
+            tooltip("本轮已全部记住；如需重新练习，请先取消对应标记。", parent=self.mw)
+            return None
+        return 3 if complete else 1
+
+    def prepare_answer(self, answer: Any) -> bool:
+        if not self.controls_round():
+            return True
+        try:
+            plan = self.plan()
+            config = self.mw.col.decks.config_dict_for_deck_id(
+                self.reviewer.card.current_deck_id()
+            )
+            initial_ease = config.get("new", {}).get("initialFactor", 2500) / 1000
+            apply_round_schedule(answer, plan, initial_ease)
+            self.submitted_plan = plan
+            return True
+        except STORAGE_ERRORS as exc:
+            showWarning("逐空评分未提交，请重试。\n" + str(exc), parent=self.mw)
+            return False
+
+    def answer_buttons(self) -> str | None:
+        if not self.controls_round():
+            return None
+        try:
+            plan = self.plan()
+        except STORAGE_ERRORS:
+            return "<div>逐空评分暂不可用，请重新打开此卡。</div>"
+        complete = plan["completed"]
+        progress = f"本轮已记住 {len(self.value['known'])}/{len(self.slots)}"
+        detail = f"表现分 {plan['quality']}/100" if complete else "标记掌握项后继续"
+        time_style = 'style="display:block;position:static;transform:none;font-size:11px;font-weight:normal;line-height:1.4;margin-top:3px;opacity:.8"'
+        button_style = (
+            'style="height:auto;min-height:44px;padding:6px 12px;line-height:1.3"'
+        )
+        return (
+            '<center><div style="font-size:12px;margin:0 0 5px">'
+            f"逐空评分 · {progress} · {detail}"
+            '</div><button data-ease="1" onclick="pycmd(\'ease1\');" '
+            + button_style
+            + " "
+            + ("disabled " if complete else "")
+            + f">再练未掌握<span {time_style}>约 {plan['loop_seconds'] // 60} 分钟</span></button> "
+            + '<button id="defease" data-ease="3" onclick="pycmd(\'ease3\');" '
+            + button_style
+            + " "
+            + ("" if complete else "disabled ")
+            + f">完成本轮<span {time_style}>"
+            + (f"{plan['next_days']} 天后复习" if complete else "全部勾选后可完成")
+            + "</span></button></center>"
+        )
 
     def current(self, token: str, *, action: bool = False) -> bool:
         reviewer = self.reviewer
@@ -345,6 +444,8 @@ class WeakReview:
             f"window.ankiWeakReview?.stop({json.dumps(self.token)});"
         )
         self.update_button()
+        if self.reviewer.state == "answer":
+            self.reviewer._showEaseButtons()
 
     def change(self, known: list[str]) -> None:
         if known == self.value["known"]:
@@ -364,21 +465,25 @@ class WeakReview:
 
     def queue_auto(self) -> None:
         if not self.auto_pass or self.full:
-            tooltip("本轮空格已全部记住，可按实际表现评分。", parent=self.mw)
+            tooltip(
+                "完整测试可按实际表现评分。"
+                if getattr(self, "full", False)
+                else "本轮空格已全部记住，点击“完成本轮”即可。",
+                parent=self.mw,
+            )
             return
-        result = burden(self.value.get("attempts", {}), self.value["known"])
         pending = (
             self.card_id,
             self.schedule,
             self.source,
             self.manifest,
-            result["rating"],
+            3,
             uuid.uuid4().hex,
             time.monotonic() + 15,
         )
         self.auto_pending = pending
         tooltip(
-            f"全部记住 · 自动{'困难' if pending[4] == 2 else '良好'}；可用 Anki 撤销评分。",
+            "全部记住 · 正在完成本轮；可用 Anki 撤销。",
             parent=self.mw,
         )
         if self.reviewer.state == "question":
@@ -407,11 +512,7 @@ class WeakReview:
                 tooltip("调度计算尚未完成，请稍后手动评分。", parent=self.mw)
             return
         self.auto_pending = None
-        self.auto_rating = True
-        try:
-            self.reviewer._answerCard(pending[4])
-        finally:
-            self.auto_rating = False
+        self.reviewer._answerCard(pending[4])
 
     def difficulty(self) -> dict:
         valid = set(
@@ -459,6 +560,8 @@ class WeakReview:
         score = burden(self.value.get("attempts", {}), self.value["known"])
         self.status = f"本轮已记住 {len(self.value['known'])}/{len(self.slots)}；最多测试 {score['peak']} 次 · 本轮负担 {score['score']}/100"
         self.update_button()
+        if self.reviewer.state == "answer":
+            self.reviewer._showEaseButtons()
 
     def update_button(self) -> None:
         label = "逐空"
@@ -499,7 +602,7 @@ class WeakReview:
         reset.setEnabled(bool(self.manifest and self.value["known"]))
         reset.triggered.connect(self.reset)
         menu.addSeparator()
-        auto = menu.addAction("全部勾选后自动通过（按本轮表现评分）")
+        auto = menu.addAction("全部勾选后自动完成本轮（逐空评分与间隔）")
         auto.setCheckable(True)
         auto.setChecked(self.auto_pass)
         auto.triggered.connect(self.toggle_auto)
@@ -572,6 +675,7 @@ class WeakReview:
                         "at": int(time.time()),
                         "rating": int(answer.rating),
                         "burden": burden(self.value["attempts"], self.value["known"]),
+                        **(self.submitted_plan or {}),
                     },
                 )
             self.store.advance(
@@ -580,9 +684,13 @@ class WeakReview:
                 self.source,
                 self.manifest,
                 self.value,
-                continues_round(answer.new_state)
-                and len(self.value["known"]) < len(self.slots),
+                continues_round(answer.new_state),
             )
+            if self.submitted_plan and self.submitted_plan["completed"]:
+                tooltip(
+                    f"本轮已完成 · 表现分 {self.submitted_plan['quality']}/100 · {self.submitted_plan['next_days']} 天后复习",
+                    parent=self.mw,
+                )
         except STORAGE_ERRORS as exc:
             showWarning(
                 "评分已成功；逐空标记保存失败，下次将完整测试。\n" + str(exc),
@@ -616,14 +724,15 @@ class WeakReview:
             "支持标准文字挖空、Anki Studio 灰色遮挡、Enhanced Cloze 当前编号的填空，"
             "以及思维导图 V3 网页中的点击文字填空、SVG 矩形遮挡。普通图片、"
             "原生图片遮挡和其它自定义模板暂时保持原流程；普通图片需先用编辑器明确标注区域。\n\n"
-            "重来／困难／良好／简单均仍使用原调度：评分后若处于学习或重学，保留本轮标记；"
-            "毕业到正常间隔复习则结束本轮。普通复习的困难一般也会结束本轮；无重学步骤时重来也可能直接结束。"
-            "关闭软件、跨天、切卡不清空；撤销评分恢复对应轮次。完整测试只临时忽略标记。\n\n"
-            "全部勾选默认自动通过：最高测试次数≥3 或平均次数≥2 时为困难，否则良好；可在逐空菜单关闭。"
-            "全部记住后，下一学习步骤重新测试，避免沿用全部标记跳过复习。\n\n"
+            "逐空模式使用本轮独立评分：未全部记住时点击“再练未掌握”，保留已有标记；"
+            "全部勾选后直接完成本轮，不再继续原来的分钟级学习步骤。下次整卡复习按天安排。"
+            "关闭软件、跨天、切卡不清空未完成标记；撤销评分恢复对应轮次。\n\n"
+            "整卡间隔结合各空测试次数、近期难度和上次完成间隔计算；首次完成为 1–3 天，"
+            "后续随实际表现延长或缩短，同日反复练习不会拉长间隔。难点可提前在专项练习中巩固。"
+            "完整测试、关闭逐空或不支持的卡片使用原评分。\n\n"
             "橙色圆环为重点，黄色圆环为留意；悬停显示次数。工具菜单可查看每日/牌组总结并单空练习。"
             "近期难度随新轮次升降；AI 仅在点击生成后读取当前列表中的上下文与原图。\n\n"
-            "本机记录保存在当前账户的 weak-review.sqlite3，不随 Anki 同步；自动评分使用原生调度和学习记录。"
+            "逐空明细保存在当前账户的 weak-review.sqlite3，不随 Anki 同步；整卡评分与日期通过原生事务保存并可撤销。"
             "内容、区域或图片版本改变后重新测试。筛选牌组暂不支持。",
             parent=self.mw,
         )

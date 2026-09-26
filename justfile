@@ -28,7 +28,7 @@ weak-review-test:
     $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_weak_review.py qt/tests/test_review_undo.py qt/tests/test_review_shortcuts.py qt/tests/test_review_layout.py qt/tests/test_dual_review_api.py
 
 weak-insights-test:
-    $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_weak_review_insights.py qt/tests/test_weak_review.py qt/tests/test_ai_images.py qt/tests/test_review_undo.py qt/tests/test_review_shortcuts.py qt/tests/test_dual_review_api.py
+    $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_weak_review_schedule.py qt/tests/test_weak_review_insights.py qt/tests/test_weak_review.py qt/tests/test_ai_images.py qt/tests/test_review_undo.py qt/tests/test_review_shortcuts.py qt/tests/test_dual_review_api.py
 
 weak-insights-format:
     & "out/pyenv/Scripts/ruff.exe" check --select I --fix qt/aqt/builtin_features/weak_review*.py qt/aqt/builtin_features/passfail2/__init__.py qt/tests/test_weak_review*.py scripts/weak_insights_smoke.py scripts/weak_insights_export.py

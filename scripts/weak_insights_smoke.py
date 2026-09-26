@@ -100,6 +100,36 @@ def run_checks(env):
             == "重点",
         )
         mw.grab().save(str(base / "insights-review.png"))
+        reviewer._showAnswer()
+        wait(lambda: ready(reviewer) and reviewer.state == "answer")
+        wait(lambda: "再练未掌握" in js(reviewer.bottom.web, "document.body.innerText"))
+        check(
+            "round controls disable completion until every blank is marked",
+            js(
+                reviewer.bottom.web,
+                "document.querySelector('[data-ease=\"3\"]').disabled",
+            ),
+        )
+        before_reject = mw.col.db.scalar(
+            "select count(*) from revlog where cid=?", card_id
+        )
+        reviewer._answerCard(3)
+        check(
+            "legacy passing key cannot finish an incomplete round",
+            mw.col.db.scalar("select count(*) from revlog where cid=?", card_id)
+            == before_reject,
+        )
+        js(
+            reviewer.bottom.web,
+            "window.roundPaintReady=false;requestAnimationFrame(()=>requestAnimationFrame(()=>window.roundPaintReady=true))",
+        )
+        wait(
+            lambda: js(
+                reviewer.bottom.web,
+                "window.roundPaintReady === true && document.querySelector('[data-ease=\"3\"]')?.disabled === true",
+            )
+        )
+        mw.grab().save(str(base / "round-controls.png"))
         # Keep ordinary review open so native undo remains available.
         extra = mw.col.new_note(model)
         extra["Text"] = "后续卡片 {{c1::保留撤销}}"
@@ -117,11 +147,11 @@ def run_checks(env):
         )
         wait(lambda: ready(reviewer))
         check(
-            "last tick alone submits one native Hard in pass fail mode",
+            "last tick commits one completion outcome in pass fail mode",
             mw.col.db.scalar(
                 "select ease from revlog where cid=? order by id desc limit 1", card_id
             )
-            == 2,
+            == 3,
         )
         saved = controller.store.load(
             card_id,
@@ -130,9 +160,39 @@ def run_checks(env):
             manifest,
         )
         check(
-            "completed round does not skip the next native learning test",
-            saved["known"] == [],
+            "completed round moves to a future review instead of another learning step",
+            saved["known"] == []
+            and mw.col.get_card(card_id).type == 2
+            and mw.col.get_card(card_id).queue == 2
+            and mw.col.get_card(card_id).ivl == 1
+            and reviewer.card.id != card_id,
         )
+        import importlib
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        disperse = importlib.import_module(
+            "aqt.builtin_features.fsrs_helper.schedule.disperse_siblings"
+        )
+        previous_mw = disperse.mw
+        touched = Mock(return_value=False)
+        disperse.mw = SimpleNamespace(col=SimpleNamespace(get_config=touched))
+        try:
+            disperse.disperse_siblings_when_review(
+                SimpleNamespace(
+                    weak_review=SimpleNamespace(
+                        card_id=card_id, submitted_plan={"completed": True}
+                    )
+                ),
+                SimpleNamespace(id=card_id),
+                3,
+            )
+            check(
+                "automatic FSRS dispersal cannot overwrite the completed round interval",
+                not touched.called,
+            )
+        finally:
+            disperse.mw = previous_mw
         mw.undo()
         wait(lambda: not mw._background_op_count)
         reviewer.refresh_if_needed()
@@ -317,6 +377,44 @@ def run_checks(env):
         check(
             "image report embeds its offline image", "data:image/png;base64," in content
         )
+        mw.moveToState("deckBrowser")
+        # Both panels use the same completion transaction, with separate tokens.
+        dual_decks = []
+        dual_ids = []
+        for label in ("左", "右"):
+            did = mw.col.decks.id("逐空完成双栏" + label)
+            for index in range(2):
+                dual_note = mw.col.new_note(model)
+                dual_note.fields[0] = f"{label}{index} {{{{c1::合成答案}}}}"
+                mw.col.add_note(dual_note, did)
+                if index == 0:
+                    dual_ids.append(dual_note.cards()[0].id)
+            dual_decks.append(did)
+        mw.col.decks.select(dual_decks[0])
+        mw.moveToState("review")
+        wait(lambda: ready(mw.reviewer))
+        mw.dual_review.toggle()
+        left, right = mw.dual_review.panels
+        wait(lambda: not left.pending and not right.pending)
+        right.deck.setCurrentIndex(right.deck.findData(dual_decks[1]))
+        mw.dual_review.activate(right, focus=True)
+        wait(lambda: not right.pending and ready(right.reviewer))
+        right_id, left_id = right.reviewer.card.id, left.reviewer.card.id
+        right.reviewer._showAnswer()
+        wait(lambda: ready(right.reviewer) and right.reviewer.state == "answer")
+        js(right.reviewer.web, "document.querySelector('[data-wr-key=s0]').click()")
+        wait(
+            lambda: (
+                not right.pending
+                and ready(right.reviewer)
+                and right.reviewer.card.id != right_id
+            )
+        )
+        check(
+            "dual pane completion leaves no learning loop and keeps the other card",
+            mw.col.get_card(right_id).type == 2 and left.reviewer.card.id == left_id,
+        )
+        mw.dual_review.stop()
         mw.moveToState("deckBrowser")
     else:
         expected = json.loads(

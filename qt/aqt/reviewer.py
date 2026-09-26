@@ -678,12 +678,18 @@ class Reviewer:
         if not proceed:
             return
 
+        if (round_ease := self.weak_review.normalize_rating(ease)) is None:
+            return
+        ease = cast(Literal[1, 2, 3, 4], round_ease)
+
         sched = cast(V3Scheduler, self.mw.col.sched)
         answer = sched.build_answer(
             card=self.card,
             states=self._v3.states,
             rating=self._v3.rating_from_ease(ease),
         )
+        if not self.weak_review.prepare_answer(answer):
+            return
 
         def after_answer(changes: OpChanges) -> None:
             self.weak_review.after_answer(answer)
@@ -1230,6 +1236,9 @@ timerStopped = false;
     def _answerButtons(self) -> str:
         from aqt.builtin_features.passfail2 import answer_key_hint
         from aqt.builtin_features.review_tools import render
+
+        if (round_buttons := self.weak_review.answer_buttons()) is not None:
+            return round_buttons
 
         if isinstance(custom := render(self, "buttons"), str):
             return custom

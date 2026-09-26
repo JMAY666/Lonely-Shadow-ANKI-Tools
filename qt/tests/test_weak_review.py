@@ -183,7 +183,7 @@ def test_all_marked_with_auto_disabled_only_prompts_for_rating(tmp_path, monkeyp
     monkeypatch.setattr("aqt.builtin_features.weak_review.tooltip", prompt)
     controller.change(["s0"])
     prompt.assert_called_once()
-    assert "按实际表现评分" in prompt.call_args.args[0]
+    assert "完成本轮" in prompt.call_args.args[0]
     assert controller.store.load(1, "s", "n", "m")["known"] == ["s0"]
 
 
