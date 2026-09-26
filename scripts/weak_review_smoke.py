@@ -80,19 +80,17 @@ def mark(reviewer, index):
     wait(lambda: len(reviewer.weak_review.value["known"]) != before)
 
 
-def mouse_click(reviewer, selector, *, in_frame=False):
-    mw.activateWindow()
-    reviewer.web.setFocus()
-    wait(lambda: reviewer.shortcuts.available())
+def mouse_point(reviewer, selector, *, in_frame=False, owner=False):
     point = js(
         reviewer.web,
-        """(selector => {
-            const target = document.querySelector(selector);
+        """(([selector, owner]) => {
+            let target = document.querySelector(selector);
+            if (owner) target = target.previousElementSibling;
             target.scrollIntoView({block: 'center'});
             const rect = target.getBoundingClientRect();
             return [rect.x + rect.width / 2, rect.y + rect.height / 2];
         })("""
-        + json.dumps(selector)
+        + json.dumps([selector, owner])
         + ")",
         in_frame=in_frame,
     )
@@ -100,15 +98,57 @@ def mouse_click(reviewer, selector, *, in_frame=False):
         outer = js(
             reviewer.web,
             "{const frame=document.querySelector('#receiver');"
-            "frame.scrollIntoView({block:'center'});const rect=frame.getBoundingClientRect();"
+            "frame.scrollIntoView({block:'start'});const rect=frame.getBoundingClientRect();"
             "[rect.x + frame.clientLeft, rect.y + frame.clientTop]}",
         )
         point = [point[i] + outer[i] for i in range(2)]
     zoom = reviewer.web.zoomFactor()
+    return QPoint(round(point[0] * zoom), round(point[1] * zoom))
+
+
+def mouse_move(reviewer, selector, *, in_frame=False, owner=False):
+    mw.activateWindow()
+    reviewer.web.setFocus()
+    target = reviewer.web.focusProxy() or reviewer.web
+    target.setMouseTracking(True)
+    point = mouse_point(reviewer, selector, in_frame=in_frame, owner=owner)
+    # Offscreen Qt has no window-system cursor motion. Deliver the same mouse
+    # move through the actual WebEngine widget instead of a synthetic DOM event.
+    QApplication.sendEvent(
+        target,
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(point),
+            QPointF(target.mapToGlobal(point)),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+
+
+def mouse_click(reviewer, selector, *, in_frame=False):
+    mw.activateWindow()
+    reviewer.web.setFocus()
+    wait(lambda: reviewer.shortcuts.available())
+    if js(
+        reviewer.web,
+        f"document.querySelector({json.dumps(selector)}).matches('.anki-wr-mark')",
+        in_frame=in_frame,
+    ):
+        mouse_move(reviewer, selector, in_frame=in_frame, owner=True)
+        wait(
+            lambda: js(
+                reviewer.web,
+                f"document.querySelector({json.dumps(selector)}).getClientRects().length > 0",
+                in_frame=in_frame,
+            )
+        )
+        mouse_move(reviewer, selector, in_frame=in_frame)
     QTest.mouseClick(
         reviewer.web.focusProxy() or reviewer.web,
         Qt.MouseButton.LeftButton,
-        pos=QPoint(round(point[0] * zoom), round(point[1] * zoom)),
+        pos=mouse_point(reviewer, selector, in_frame=in_frame),
     )
 
 
@@ -316,7 +356,16 @@ try:
     import aqt.builtin_features.weak_review as feature
     from aqt import mediasrv
     from aqt.progress import ProgressDialog
-    from aqt.qt import QApplication, QLabel, QPoint, Qt, QTimer
+    from aqt.qt import (
+        QApplication,
+        QEvent,
+        QLabel,
+        QMouseEvent,
+        QPoint,
+        QPointF,
+        Qt,
+        QTimer,
+    )
 
     revision = 0
 
@@ -395,6 +444,13 @@ try:
 
     if mode == "write":
         before = snapshot()
+        check(
+            "unrevealed marks occupy no space and cannot receive focus",
+            js(
+                reviewer.web,
+                "[...document.querySelectorAll('.anki-wr-mark')].every(b=>b.disabled && !b.getClientRects().length)",
+            ),
+        )
         js(reviewer.web, "document.querySelector('#qa .cloze').click()")
         wait(lambda: hidden(reviewer) == 9)
         check(
@@ -403,7 +459,28 @@ try:
         )
         mw.activateWindow()
         reviewer.web.setFocus()
-        js(reviewer.web, "document.querySelector('[data-wr-key=s0]').focus()")
+        table_bounds = js(
+            reviewer.web,
+            "JSON.stringify(document.querySelector('#qa table').getBoundingClientRect())",
+        )
+        js(reviewer.web, "document.querySelector('#qa .cloze').focus()")
+        check(
+            "keyboard focus exposes one control without moving the table",
+            js(
+                reviewer.web,
+                "document.querySelectorAll('.anki-wr-mark:popover-open').length",
+            )
+            == 1
+            and js(
+                reviewer.web,
+                "JSON.stringify(document.querySelector('#qa table').getBoundingClientRect())",
+            )
+            == table_bounds,
+        )
+        QTest.keyClick(reviewer.web.focusProxy() or reviewer.web, Qt.Key.Key_Tab)
+        wait(
+            lambda: js(reviewer.web, "document.activeElement.matches('.anki-wr-mark')")
+        )
         press_space(reviewer)
         check(
             "keyboard-focused marking control remains protected from review shortcuts",
@@ -554,6 +631,18 @@ try:
             "local image reveal does not mark",
             image_reviewer.weak_review.value["known"] == [],
         )
+        frame_js(
+            "{const c=document.querySelector('.svg_answer_parent');window.originalDiagramStyle=c.style.cssText;c.style.transform='scale(.75)';c.style.transformOrigin='top left';c.style.overflow='hidden';document.querySelector('#region-0').focus()}"
+        )
+        check(
+            "floating image control escapes scaled clipped diagrams and stays reachable",
+            frame_js(
+                "{const b=document.querySelector('.anki-wr-mark:popover-open'),r=b?.getBoundingClientRect();!!r && r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b}"
+            ),
+        )
+        frame_js(
+            "document.querySelector('.svg_answer_parent').style.cssText=originalDiagramStyle"
+        )
         frame_js("document.querySelector('[data-wr-key=s0]').click()")
         wait(lambda: image_reviewer.weak_review.value["known"] == ["s0"])
         show_question(image_reviewer)
@@ -635,6 +724,12 @@ try:
         wait(lambda: text_hidden() == 9)
         cross_origin_frame(image_reviewer)
         wait(lambda: text_hidden() == 9)
+        check(
+            "unrevealed iframe answers have no visible marking controls",
+            frame_js(
+                "[...document.querySelectorAll('.anki-wr-mark')].every(b=>!b.getClientRects().length)"
+            ),
+        )
         before_text_marks = snapshot()
         check(
             "nine custom text slots detected",
@@ -646,6 +741,37 @@ try:
             "custom text reveal does not mark",
             image_reviewer.weak_review.value["known"] == [],
         )
+        text_bounds = frame_js(
+            "JSON.stringify(document.querySelector('.anki-wr-inline-host').getBoundingClientRect())"
+        )
+        mw.grab().save(str(BASE / "quiet-text.png"))
+        mouse_move(image_reviewer, "[data-wr-key=blank-s0]", in_frame=True)
+        wait(
+            lambda: frame_js(
+                "document.querySelectorAll('.anki-wr-mark:popover-open').length===1"
+            )
+        )
+        check(
+            "hover exposes only the revealed answer control without moving text",
+            frame_js(
+                "JSON.stringify(document.querySelector('.anki-wr-inline-host').getBoundingClientRect())"
+            )
+            == text_bounds
+            and frame_js(
+                "document.querySelector('.anki-wr-mark:popover-open').dataset.wrKey==='s0'"
+            ),
+        )
+        mouse_move(image_reviewer, "[data-wr-key=s0]", in_frame=True)
+        check(
+            "pointer can reach the floating mark across the gap",
+            frame_js(
+                "document.querySelector('[data-wr-key=s0]').matches(':popover-open')"
+            ),
+        )
+        mw.grab().save(str(BASE / "hover-text.png"))
+        mouse_move(image_reviewer, ".flex-q-clz", in_frame=True)
+        wait(lambda: frame_js("!document.querySelector('.anki-wr-mark:popover-open')"))
+        check("moving away restores uncluttered reading", text_hidden() == 8)
         mouse_click(image_reviewer, "[data-wr-key=s0]", in_frame=True)
         wait(lambda: image_reviewer.weak_review.value["known"] == ["s0"])
         press_space(image_reviewer)
@@ -673,6 +799,40 @@ try:
         )
         image_reviewer._showAnswer()
         wait(lambda: ready(image_reviewer) and text_hidden() == 0)
+        mouse_move(image_reviewer, ".flex-q-clz", in_frame=True)
+        wait(lambda: frame_js("!document.querySelector('.anki-wr-mark:popover-open')"))
+        check(
+            "answer side with many blanks remains free of permanent buttons",
+            frame_js(
+                "[...document.querySelectorAll('.anki-wr-mark')].every(b=>!b.disabled && !b.getClientRects().length)"
+            ),
+        )
+        mouse_move(image_reviewer, "[data-wr-key=blank-s1]", in_frame=True)
+        wait(
+            lambda: frame_js(
+                "document.querySelector('.anki-wr-mark:popover-open')?.dataset.wrKey==='s1'"
+            )
+        )
+        mouse_move(image_reviewer, "[data-wr-key=blank-s2]", in_frame=True)
+        wait(
+            lambda: frame_js(
+                "document.querySelector('.anki-wr-mark:popover-open')?.dataset.wrKey==='s2'"
+            )
+        )
+        check(
+            "moving between answers keeps only one marking action open",
+            frame_js(
+                "document.querySelectorAll('.anki-wr-mark:popover-open').length===1"
+            ),
+        )
+        QTest.keyClick(
+            image_reviewer.web.focusProxy() or image_reviewer.web, Qt.Key.Key_Escape
+        )
+        wait(lambda: frame_js("!document.querySelector('.anki-wr-mark:popover-open')"))
+        check(
+            "Escape dismisses the mark without changing recall",
+            image_reviewer.weak_review.value["known"] == ["s0"],
+        )
         frame_js("document.querySelector('[data-wr-key=s2]').click()")
         wait(lambda: image_reviewer.weak_review.value["known"] == ["s0", "s2"])
         show_question(image_reviewer)

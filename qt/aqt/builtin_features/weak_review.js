@@ -24,6 +24,9 @@
     let localBinding = null;
     let currentRequest = null;
     let requestSequence = 0;
+    let activeMark = null;
+    let hoveredEntry = null;
+    let hideMarkTimer = null;
     const requestPrefix = Math.random().toString(36).slice(2);
     const TYPE = "anki-weak-review-v1";
     const allowedOrigin = (origin) => origin === location.origin || origin === "https://kyxz288.com";
@@ -93,6 +96,8 @@
     function restore() {
         observer?.disconnect();
         observer = null;
+        hideMark();
+        hoveredEntry = null;
         for (const undo of cleanup.reverse()) { undo(); }
         cleanup = [];
         entries = [];
@@ -110,23 +115,24 @@
         const el = document.createElement("style");
         el.id = "anki-wr-style";
         el.textContent = `
-            .anki-wr-mark { display:inline-flex;align-items:center;justify-content:center;
-              box-sizing:border-box;width:20px;height:20px;padding:0;margin:0 2px;
-              font:13px/1 sans-serif;border:1px solid #608876;border-radius:50%;
-              background:#f3fff8;color:#235c3d;vertical-align:middle;cursor:pointer; }
+            .anki-wr-mark { display:none;position:fixed;inset:auto;margin:0;
+              align-items:center;justify-content:center;box-sizing:border-box;
+              width:max-content;height:26px;padding:0 8px;white-space:nowrap;
+              font:12px/1 sans-serif;border:1px solid #608876;border-radius:7px;
+              background:#f3fff8;color:#235c3d;cursor:pointer; }
+            .anki-wr-mark:popover-open { display:inline-flex; }
+            .anki-wr-mark::backdrop { pointer-events:none; }
             .anki-wr-mark[aria-pressed="true"] { background:#286c49;color:white; }
-            .anki-wr-mark[data-wr-level="留意"] { border:2px solid #b58113;box-shadow:0 0 0 2px #f5dfa2; }
-            .anki-wr-mark[data-wr-level="重点"] { border:2px solid #b84727;box-shadow:0 0 0 3px #f2c4ad; }
-            .anki-wr-region-mark[data-wr-level="重点"], .anki-wr-region-mark[data-wr-level="留意"] { opacity:1; }
-            .anki-wr-mark:disabled { opacity:.45;cursor:default; }
+            .anki-wr-mark[data-wr-level="留意"] { border:2px solid #b58113; }
+            .anki-wr-mark[data-wr-level="重点"] { border:2px solid #b84727; }
+            .anki-wr-mark:disabled { visibility:hidden; }
             .anki-wr-mark:focus-visible { outline:2px solid #328be0;outline-offset:2px; }
             [data-wr-hidden="true"] { background:#bed8cd!important;border:1px solid #648c7d!important;
               color:transparent!important;cursor:pointer; }
             [data-wr-hidden="false"] { background:transparent!important;border-color:transparent!important; }
-            [data-wr-known="true"] { outline:1px dashed #458466;outline-offset:1px; }
-            .anki-wr-region-mark { position:absolute;z-index:4;margin:0;opacity:0; }
-            .anki-wr-region-mark:focus,
-            .anki-wr-region-mark:hover { opacity:1; }
+            [data-wr-known="true"]:not([data-wr-hidden]) { text-decoration:underline;
+              text-decoration-color:#75a68d;text-decoration-thickness:1px;text-underline-offset:3px; }
+            [data-wr-known="true"][data-wr-hidden] { box-shadow:inset 0 -1px #75a68d; }
         `;
         document.head.appendChild(el);
     }
@@ -134,11 +140,63 @@
         target.addEventListener(name, action, capture);
         cleanup.push(() => target.removeEventListener(name, action, capture));
     }
+    function hideMark() {
+        clearTimeout(hideMarkTimer);
+        hideMarkTimer = null;
+        if (activeMark?.button.matches(":popover-open")) { activeMark.button.hidePopover(); }
+        activeMark = null;
+    }
+    function positionMark() {
+        if (!activeMark) { return; }
+        const { el, button } = activeMark;
+        const rects = [...el.getClientRects()];
+        const rect = rects[rects.length - 1];
+        const width = document.documentElement.clientWidth;
+        const height = document.documentElement.clientHeight;
+        if (!rect || rect.bottom <= 0 || rect.top >= height || rect.right <= 0 || rect.left >= width) {
+            hideMark();
+            return;
+        }
+        const box = button.getBoundingClientRect();
+        const left = Math.max(4, Math.min(rect.right - box.width, width - box.width - 4));
+        const top = Math.max(
+            4,
+            Math.min(
+                rect.top >= box.height + 8 ? rect.top - box.height - 4 : rect.bottom + 4,
+                height - box.height - 4,
+            ),
+        );
+        for (const [key, value] of Object.entries({ left: `${left}px`, top: `${top}px` })) {
+            if (button.style[key] !== value) { button.style[key] = value; }
+        }
+    }
+    function showMark(entry) {
+        if (!active || entry.button.disabled || !entry.el.isConnected) { return; }
+        clearTimeout(hideMarkTimer);
+        if (activeMark !== entry) {
+            hideMark();
+            activeMark = entry;
+            // The top layer escapes clipped tables and transformed SVG containers,
+            // while the DOM position preserves Tab order immediately after the answer.
+            entry.button.showPopover();
+        }
+        positionMark();
+    }
+    function deferHideMark() {
+        clearTimeout(hideMarkTimer);
+        hideMarkTimer = setTimeout(() => {
+            if (
+                activeMark && !activeMark.button.matches(":hover,:focus-visible")
+                && !activeMark.el.matches(":hover,:focus-visible")
+            ) { hideMark(); }
+        }, 180);
+    }
     function markButton(entry) {
         const button = document.createElement("button");
         button.className = "anki-wr-mark";
         button.type = "button";
-        button.textContent = "✓";
+        button.popover = "manual";
+        button.textContent = "✓ 记住";
         button.dataset.wrKey = entry.key;
         button.setAttribute("aria-label", `空格 ${entry.index + 1}：本轮已记住`);
         button.addEventListener("click", event => {
@@ -149,6 +207,7 @@
             // the control lives in a card iframe. Keyboard activation stays local.
             if (event.detail > 0) {
                 button.blur();
+                hideMark();
                 if (child) { window.parent.focus(); }
             }
             button.disabled = true;
@@ -156,6 +215,57 @@
         });
         // Space/Enter operate the control, never the reviewer's rating shortcut.
         button.addEventListener("keydown", event => event.stopPropagation());
+        const tabindex = entry.el.getAttribute("tabindex");
+        entry.el.tabIndex = 0;
+        cleanup.push(() => {
+            if (tabindex === null) { entry.el.removeAttribute("tabindex"); }
+            else { entry.el.setAttribute("tabindex", tabindex); }
+        });
+        listen(entry.el, "mouseenter", () => {
+            hoveredEntry = entry;
+            showMark(entry);
+        });
+        listen(entry.el, "mouseleave", () => {
+            if (hoveredEntry === entry) { hoveredEntry = null; }
+            deferHideMark();
+        });
+        listen(entry.el, "focus", () => showMark(entry));
+        listen(entry.el, "blur", deferHideMark);
+        if (!entry.inline) {
+            listen(entry.el, "keydown", event => {
+                if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    entry.el.click();
+                }
+            }, true);
+        }
+        listen(button, "mouseenter", () => clearTimeout(hideMarkTimer));
+        listen(button, "mouseleave", deferHideMark);
+        listen(button, "focus", () => showMark(entry));
+        listen(button, "blur", deferHideMark);
+        if (entry.index === 0) {
+            listen(document, "scroll", positionMark, true);
+            listen(window, "resize", positionMark);
+            listen(window, "blur", () => {
+                hoveredEntry = null;
+                hideMark();
+            });
+            listen(document, "pointerdown", event => {
+                if (activeMark && !activeMark.el.contains(event.target) && !activeMark.button.contains(event.target)) {
+                    hoveredEntry = null;
+                    hideMark();
+                }
+            }, true);
+            listen(document, "keydown", event => {
+                if (event.key === "Escape" && activeMark) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    hoveredEntry = null;
+                    hideMark();
+                }
+            }, true);
+        }
         cleanup.push(() => button.remove());
         entry.button = button;
         return button;
@@ -186,6 +296,8 @@
             }
             entry.button.disabled = !visible;
             entry.button.setAttribute("aria-pressed", String(remembered));
+            const label = remembered ? "✓ 已记住" : "✓ 记住";
+            if (entry.button.textContent !== label) { entry.button.textContent = label; }
             entry.button.title = remembered ? "已记住；点击重新加入复习" : "标记为本轮已记住";
             const info = difficulty[entry.key];
             if (info) {
@@ -196,6 +308,10 @@
             }
             entry.button.setAttribute("aria-label", `空格 ${entry.index + 1}：${entry.button.title}`);
         }
+        if (activeMark?.button.disabled) { hideMark(); }
+        const focused = entries.find(entry => entry.el === document.activeElement);
+        if (hoveredEntry || focused) { showMark(hoveredEntry || focused); }
+        positionMark();
     }
     function activateNative() {
         if (document.querySelector("#qa #enhanced-cloze-content, #qa .answers span.aswk")) { return false; }
@@ -712,17 +828,6 @@
             : [];
         return { container, imageHost, img, masks, slots, image, identity };
     }
-    function positionButtons(found) {
-        for (const entry of entries) {
-            const left = parseFloat(entry.el.style.left);
-            const right = left + parseFloat(entry.el.style.width) + 2;
-            const x = right + 20 <= found.imageHost.clientWidth ? right : Math.max(0, left - 22);
-            const changes = { left: `${x}px`, top: entry.el.style.top };
-            for (const [key, value] of Object.entries(changes)) {
-                if (entry.button.style[key] !== value) { entry.button.style[key] = value; }
-            }
-        }
-    }
     function discoverRegions() {
         if (!config?.enabled) { return; }
         const inline = inlineDescription() || tableDescription();
@@ -739,7 +844,7 @@
         if (!found) { return; }
         const signature = JSON.stringify([found.slots, found.image, found.identity]);
         if (signature === manifest) {
-            positionButtons(found);
+            positionMark();
             return;
         }
         restore();
@@ -757,10 +862,8 @@
         for (const entry of entries) {
             const button = markButton(entry);
             button.classList.add("anki-wr-region-mark");
-            container.appendChild(button);
+            entry.el.after(button);
             button.disabled = true;
-            listen(entry.el, "mouseenter", () => button.style.opacity = "1");
-            listen(entry.el, "mouseleave", () => button.style.removeProperty("opacity"));
             listen(entry.el, "click", event => {
                 if (!active) { return; }
                 event.preventDefault();
@@ -774,7 +877,6 @@
                 delete entry.el.dataset.wrKnown;
             });
         }
-        positionButtons(found);
         // Preserve the template's "reveal next" affordance, with no mark side effect.
         const revealNext = event => {
             if (!active || event.target.closest(".anki-wr-mark,.svg_mask,.svg_mask_show")) { return; }
@@ -894,6 +996,10 @@
             if (value.config) { start(value.config); }
             else if (value.state) { apply(value.state); }
             else if (value.stop) { stop(value.stop); }
+            else if (config?.enabled && value.dismiss === config.token) {
+                hoveredEntry = null;
+                hideMark();
+            }
         } else {
             if (event.source !== frame()?.contentWindow || !allowedOrigin(event.origin)) { return; }
             if (value.ready) { sendConfig(event.source); }
@@ -903,6 +1009,15 @@
             }
         }
     });
+    if (!child) {
+        // Hovering an embedded answer does not move keyboard focus into its
+        // frame. Escape must still dismiss that frame's contextual action.
+        window.addEventListener("keydown", event => {
+            if (event.key === "Escape" && config?.enabled && activeFrame) {
+                activeFrame.postMessage({ type: TYPE, dismiss: config.token }, "*");
+            }
+        }, true);
+    }
     window.ankiWeakReview = { start, apply, stop };
     if (child) { window.parent.postMessage({ type: TYPE, ready: true }, "*"); }
 })();
