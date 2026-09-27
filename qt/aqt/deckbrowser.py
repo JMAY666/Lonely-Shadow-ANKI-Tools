@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import json
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, cast
@@ -16,7 +17,7 @@ from anki.decks import DeckCollapseScope, DeckId, DeckTreeNode
 from anki.scheduler.v3 import Scheduler as V3Scheduler
 from aqt import AnkiQt, gui_hooks
 from aqt.deckoptions import display_options_for_deck_id
-from aqt.operations import QueryOp
+from aqt.operations import CollectionOp, QueryOp
 from aqt.operations.deck import (
     add_deck_dialog,
     remove_decks,
@@ -79,8 +80,15 @@ class DeckBrowser:
         self._selection_revision = 0
         self._starting_review = False
         self._render_revision = 0
+        self._selection_request: tuple[int, DeckId] | None = None
+        self._selection_busy = False
+        self._selection_error = False
+        self._counts_cached_at = 0.0
 
     def show(self) -> None:
+        self._selection_revision += 1
+        self._selection_request = None
+        self._selection_error = False
         av_player.stop_and_clear_queue()
         self.web.set_bridge_command(self._linkHandler, self)
         # redraw top bar for theme change
@@ -88,6 +96,7 @@ class DeckBrowser:
         self.refresh()
 
     def refresh(self) -> None:
+        self._counts_cached_at = 0.0
         self._renderPage()
         self._refresh_needed = False
 
@@ -99,6 +108,7 @@ class DeckBrowser:
         self, changes: OpChanges, handler: object | None, focused: bool
     ) -> bool:
         if changes.study_queues and handler is not self:
+            self._counts_cached_at = 0.0
             self._refresh_needed = True
 
         if focused:
@@ -115,7 +125,19 @@ class DeckBrowser:
         else:
             cmd = url
             arg = ""
+        if self.selection_pending and cmd in (
+            "open",
+            "overview",
+            "statistics",
+            "browse-deck",
+        ):
+            return False
         if cmd == "open":
+            if (
+                self.mw.state == "deckBrowser"
+                and int(arg) != self._render_data.current_deck_id
+            ):
+                return False
             self.start_review(DeckId(int(arg)))
         elif cmd == "opts":
             self._showOptions(arg)
@@ -152,25 +174,76 @@ class DeckBrowser:
         return False
 
     def set_current_deck(self, deck_id: DeckId) -> None:
+        if self._starting_review or self.mw.state != "deckBrowser":
+            return
         self._selection_revision += 1
         revision = self._selection_revision
         self._render_revision += 1  # Reject renders requested before this selection.
+        self._selection_request = (revision, deck_id)
+        self._selection_error = False
+        self.web.eval(f"_deckSelectionPending('{int(deck_id)}');")
+        QTimer.singleShot(40, self._select_pending_deck)
 
-        def select() -> None:
-            if revision != self._selection_revision or self.mw.state != "deckBrowser":
-                return
-            set_current_deck(parent=self.mw, deck_id=deck_id).success(
-                lambda _: (
-                    self._renderPage(selection_only=True)
-                    if revision == self._selection_revision
-                    and self.mw.state == "deckBrowser"
-                    else None
-                )
-            ).run_in_background(initiator=self)
+    @property
+    def selection_pending(self) -> bool:
+        return bool(
+            self._selection_request or self._selection_busy or self._selection_error
+        )
 
-        QTimer.singleShot(40, select)
+    def _selection_is_current(self, revision: int) -> bool:
+        return (
+            self._selection_request is not None
+            and self._selection_request[0] == revision
+            and self.mw.state == "deckBrowser"
+        )
+
+    def _select_pending_deck(self) -> None:
+        if self._selection_busy or not self._selection_request:
+            return
+        if self.mw.state != "deckBrowser":
+            self._selection_request = None
+            return
+        revision, deck_id = self._selection_request
+        self._selection_busy = True
+
+        def select(col: Collection) -> OpChanges:
+            # Requests waiting behind another database task must not save old choices.
+            if not self._selection_is_current(revision):
+                return OpChanges()
+            return col.decks.set_current(deck_id)
+
+        def selected(_: OpChanges) -> None:
+            if self._selection_is_current(revision):
+                self._renderPage(selection_only=True, selection_revision=revision)
+            else:
+                self._selection_finished(revision)
+
+        CollectionOp(parent=self.mw, op=select).without_progress().success(
+            selected
+        ).failure(lambda exc: self._selection_failed(revision, exc)).run_in_background(
+            initiator=self
+        )
+
+    def _selection_finished(self, revision: int, rendered: bool = False) -> None:
+        self._selection_busy = False
+        if rendered and self._selection_is_current(revision):
+            self._selection_request = None
+            self._selection_error = False
+        # At most one selection/read cycle is active; keep only the latest request.
+        self._select_pending_deck()
+
+    def _selection_failed(self, revision: int, exc: Exception) -> None:
+        self._selection_busy = False
+        if self._selection_is_current(revision):
+            self._selection_request = None
+            self._selection_error = True
+            self.web.eval(f"_deckSelectionFailed({json.dumps(str(exc))});")
+        else:
+            self._select_pending_deck()
 
     def start_review(self, deck_id: DeckId) -> None:
+        if self.selection_pending:
+            return
         if self._starting_review or self.mw.state == "review":
             return
         if not self.mw.col.v3_scheduler():
@@ -230,45 +303,104 @@ class DeckBrowser:
 </center>
 """
 
-    def _renderPage(self, reuse: bool = False, selection_only: bool = False) -> None:
+    def _renderPage(
+        self,
+        reuse: bool = False,
+        selection_only: bool = False,
+        selection_revision: int | None = None,
+    ) -> None:
         if not reuse:
             self._render_revision += 1
             revision = self._render_revision
 
-            def get_data(col: Collection) -> RenderData:
+            cached = getattr(self, "_render_data", None)
+            counts_at = self._counts_cached_at
+
+            def get_data(col: Collection) -> RenderData | None:
+                nonlocal counts_at
+                if selection_revision is not None and not self._selection_is_current(
+                    selection_revision
+                ):
+                    return None
+                use_cache = (
+                    selection_only
+                    and cached
+                    and counts_at == self._counts_cached_at
+                    and time.monotonic() - counts_at < 2
+                )
+                if use_cache and cached is not None:
+                    tree = cached.tree
+                    studied = cached.studied_today
+                else:
+                    tree = col.sched.deck_due_tree()
+                    studied = col.studied_today()
+                    counts_at = time.monotonic()
                 return RenderData(
-                    tree=col.sched.deck_due_tree(),
+                    tree=tree,
                     current_deck_id=col.decks.get_current_id(),
-                    studied_today=col.studied_today(),
+                    studied_today=studied,
                     sched_upgrade_required=not col.v3_scheduler(),
                     current_deck=col.decks.current(),
                 )
 
-            def success(output: RenderData) -> None:
+            def success(output: RenderData | None) -> None:
                 if (
-                    revision != self._render_revision
+                    output is None
+                    or revision != self._render_revision
                     or self.mw.state != "deckBrowser"
-                    or output.current_deck_id != self.mw.col.decks.selected()
+                    or (
+                        self._selection_request is not None
+                        and selection_revision != self._selection_request[0]
+                    )
                 ):
+                    if selection_revision is not None:
+                        self._selection_finished(selection_revision)
                     return
                 previous = getattr(self, "_render_data", None)
                 self._render_data = output
-                if selection_only and previous and previous.tree == output.tree:
+                self._counts_cached_at = counts_at
+                self._selection_error = False
+                if (
+                    selection_only
+                    and previous
+                    and self._same_deck_directory(previous.tree, output.tree)
+                ):
                     # Keep the directory, focus, drag handlers and account widgets alive.
                     from aqt.builtin_features.learning.deck_page import render_page
 
                     page = render_page(self, DeckBrowserContent(tree="", stats=""))
                     self.web.eval(f"_updateDeckSelection({json.dumps(page)});")
-                    return
-                self.__renderPage(None)
+                else:
+                    self.__renderPage(None)
+                if selection_revision is not None:
+                    self._selection_finished(selection_revision, rendered=True)
+
+            def failed(exc: Exception) -> None:
+                if selection_revision is not None:
+                    self._selection_failed(selection_revision, exc)
+                else:
+                    showInfo(str(exc), parent=self.mw)
 
             QueryOp(
                 parent=self.mw,
                 op=get_data,
                 success=success,
-            ).run_in_background()
+            ).failure(failed).run_in_background()
         else:
             self.web.evalWithCallback("window.pageYOffset", self.__renderPage)
+
+    @staticmethod
+    def _same_deck_directory(left: DeckTreeNode, right: DeckTreeNode) -> bool:
+        """Count changes do not require rebuilding the directory/account widgets."""
+        return (
+            (left.deck_id, left.name, left.collapsed, left.filtered)
+            == (right.deck_id, right.name, right.collapsed, right.filtered)
+            and len(left.children) == len(right.children)
+            and all(
+                DeckBrowser._same_deck_directory(a, b)
+                for a, b in zip(left.children, right.children)
+            )
+        )
 
     def __renderPage(self, offset: int | None) -> None:
         data = self._render_data

@@ -6,6 +6,8 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from threading import Event
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if package := os.environ.get("ANKI_BUILTIN_PACKAGE_ROOT"):
@@ -292,6 +294,95 @@ try:
         "selected title and scope agree",
         js(
             "document.querySelector('.deck-main h1').textContent === document.querySelector('.deck-scope-info h3').textContent"
+        ),
+    )
+    # A busy database used to display an application-modal progress dialog.
+    # Hold the collection worker while keeping the Qt event loop responsive.
+    blocked, release = Event(), Event()
+
+    def hold_database():
+        blocked.set()
+        release.wait(10)
+
+    calls = []
+    save_deck = col.decks.set_current
+
+    def record_selection(did):
+        calls.append(int(did))
+        return save_deck(did)
+
+    with (
+        patch.object(mw.progress, "start", wraps=mw.progress.start) as progress,
+        patch.object(col.decks, "set_current", side_effect=record_selection),
+    ):
+        mw.taskman.run_in_background(hold_database)
+        wait(blocked.is_set)
+        started = time.monotonic()
+        js(f"document.getElementById('{parent}').querySelector('a.deck').click()")
+        wait(lambda: time.monotonic() - started > 0.85)
+        check(
+            "slow selection never opens a modal progress dialog",
+            progress.call_count == 0 and not mw.progress.busy(),
+        )
+        check(
+            "slow selection shows inline feedback and disables old study button",
+            js(
+                "document.querySelector('.deck-start').disabled && document.querySelector('.deck-selection-status').textContent.includes('正在切换')"
+            ),
+        )
+        mw.grab().save(str(BASE / "selection-wait.png"))
+        mw.onStudyKey()
+        mw.deckBrowser._linkHandler(f"open:{child}")
+        check(
+            "old study action and shortcut cannot enter the wrong deck",
+            mw.state == "deckBrowser",
+        )
+        for index in range(20):
+            target = child if index % 2 == 0 else parent
+            mw.deckBrowser.set_current_deck(target)
+            app.processEvents()
+        released_at = time.monotonic()
+        release.set()
+        wait(lambda: not mw.deckBrowser.selection_pending)
+        results["released_selection_ms"] = round(
+            (time.monotonic() - released_at) * 1000
+        )
+        ready()
+        check("twenty queued choices save only the final deck", calls == [int(parent)])
+        check(
+            "final selection matches database and reenables study",
+            col.decks.selected() == parent
+            and js(
+                f"document.querySelector('.deck-workspace').dataset.selectedDeck === '{parent}' && !document.querySelector('.deck-start').disabled"
+            ),
+        )
+        check(
+            "slow selection preserves directory and account nodes",
+            js(
+                "window.__directory === document.querySelector('.deck-directory') && window.__accountPanel === document.querySelector('.deck-global-widgets')"
+            ),
+        )
+
+    with patch.object(
+        col.decks,
+        "set_current",
+        side_effect=RuntimeError("synthetic selection failure"),
+    ):
+        mw.deckBrowser.set_current_deck(child)
+        wait(lambda: js("!document.querySelector('.deck-selection-retry').hidden"))
+        check(
+            "selection failure keeps unsafe actions disabled and offers retry",
+            js(
+                "document.querySelector('.deck-start').disabled && document.querySelector('.deck-selection-status').textContent.includes('synthetic selection failure')"
+            ),
+        )
+    js("document.querySelector('.deck-selection-retry').click()")
+    ready()
+    check(
+        "retry recovers correct deck without losing the page",
+        col.decks.selected() == child
+        and js(
+            "!document.querySelector('.deck-start').disabled && document.querySelector('.deck-selection-retry').hidden && window.__directory === document.querySelector('.deck-directory')"
         ),
     )
     js(

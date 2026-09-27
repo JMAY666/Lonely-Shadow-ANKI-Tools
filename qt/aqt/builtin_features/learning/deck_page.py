@@ -28,7 +28,13 @@ def render_page(browser: Any, content: Any) -> str:
             ("new-count", "learn-count", "review-count"),
         )
     )
-    children = len(browser.mw.col.decks.deck_and_child_ids(data.current_deck_id)) - 1
+
+    def descendant_count(node: Any) -> int:
+        return (
+            sum(1 + descendant_count(child) for child in node.children) if node else 0
+        )
+
+    children = descendant_count(node)
     description = html.escape(deck.get("desc", ""))
     return f"""
 <div class="deck-workspace" data-selected-deck="{did}" data-render-revision="{browser._render_revision}">
@@ -49,7 +55,7 @@ def render_page(browser: Any, content: Any) -> str:
   <main class="deck-content" aria-label="当前牌组内容">
   <section class="deck-main" aria-label="当前牌组学习面板">
     <span class="deck-eyebrow">当前牌组</span><h1>{name}</h1>
-    <p class="deck-muted">今天的学习，从这里开始。</p>
+    <p class="deck-muted deck-selection-feedback"><span class="deck-selection-status" role="status" aria-live="polite">今天的学习，从这里开始。</span><button class="deck-selection-retry" hidden onclick="_retryDeckSelection()">重试</button></p>
     <button class="deck-study-card" onclick="pycmd('open:{did}')" aria-label="{name}的卡片：直接开始学习" title="从当前牌组及其子牌组的原生队列开始；下列为分类计数"><span class="deck-study-cards">{entries}</span><span class="deck-card-entry">进入本牌组学习 →</span></button>
     <button class="deck-start" onclick="pycmd('open:{did}')">开始学习</button>
     <p class="deck-muted">范围为当前牌组及其子牌组，遵循原生到期时间、每日限额和调度规则。</p>

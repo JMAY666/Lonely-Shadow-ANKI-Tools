@@ -4,6 +4,49 @@
 $(init);
 
 let filterDeckDirectory: (() => void) | undefined;
+let deckSelectionTimer: ReturnType<typeof setTimeout> | undefined;
+let pendingDeckId: string | undefined;
+
+function highlightDeck(id: string): void {
+    document.querySelectorAll<HTMLElement>("tr.deck").forEach((row) => {
+        const selected = row.id === id;
+        row.classList.toggle("current", selected);
+        row.querySelector("a.deck")?.setAttribute("aria-current", String(selected));
+    });
+}
+
+function _deckSelectionPending(id: string): void {
+    pendingDeckId = id;
+    clearTimeout(deckSelectionTimer);
+    highlightDeck(id);
+    document.querySelector(".deck-main")?.setAttribute("aria-busy", "true");
+    document.querySelectorAll<HTMLButtonElement>(
+        ".deck-main button:not(.deck-selection-retry), .deck-scope-info button",
+    ).forEach((button) => {
+        button.disabled = true;
+    });
+    const retry = document.querySelector<HTMLButtonElement>(".deck-selection-retry");
+    if (retry) { retry.hidden = true; }
+    const status = document.querySelector<HTMLElement>(".deck-selection-status");
+    if (status) { status.textContent = "今天的学习，从这里开始。"; }
+    deckSelectionTimer = setTimeout(() => {
+        const name = document.getElementById(id)?.querySelector("a.deck")?.textContent || "所选牌组";
+        if (status) { status.textContent = `正在切换到「${name}」…`; }
+    }, 300);
+}
+
+function _deckSelectionFailed(message: string): void {
+    clearTimeout(deckSelectionTimer);
+    document.querySelector(".deck-main")?.setAttribute("aria-busy", "false");
+    const status = document.querySelector<HTMLElement>(".deck-selection-status");
+    if (status) { status.textContent = `切换未完成，请重试或选择其他牌组。${message}`; }
+    const retry = document.querySelector<HTMLButtonElement>(".deck-selection-retry");
+    if (retry) { retry.hidden = false; }
+}
+
+function _retryDeckSelection(): void {
+    if (pendingDeckId) { pycmd(`select:${pendingDeckId}`); }
+}
 
 function _setDeckCollapsed(id: string, collapsed: boolean): void {
     const row = document.getElementById(id);
@@ -22,16 +65,14 @@ function _updateDeckSelection(html: string): void {
     const workspace = document.querySelector<HTMLElement>(".deck-workspace");
     const incoming = next.querySelector<HTMLElement>(".deck-workspace");
     if (!workspace || !incoming) { return; }
+    clearTimeout(deckSelectionTimer);
+    pendingDeckId = undefined;
     for (const selector of [".deck-selected-path", ".deck-main", ".deck-scope-info"]) {
         const replacement = next.querySelector(selector);
         if (replacement) { document.querySelector(selector)?.replaceWith(replacement); }
     }
     Object.assign(workspace.dataset, incoming.dataset);
-    document.querySelectorAll<HTMLElement>("tr.deck").forEach((row) => {
-        const selected = row.id === incoming.dataset.selectedDeck;
-        row.classList.toggle("current", selected);
-        row.querySelector("a.deck")?.setAttribute("aria-current", String(selected));
-    });
+    highlightDeck(incoming.dataset.selectedDeck || "");
 }
 
 function init() {

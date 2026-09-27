@@ -229,6 +229,8 @@ body.deck-resizing {
 .deck-directory-actions { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 14px; border-top: 1px solid var(--border-subtle); }
 .deck-directory-actions button { flex: 1; }
 .deck-main { padding: 28px; }
+.deck-main button:disabled, .deck-scope-info button:disabled { cursor: default; opacity: .55; }
+.deck-selection-retry { margin-left: 10px; }
 .deck-eyebrow, .deck-muted { opacity: .7; font-size: 13px; line-height: 1.6; }
 .deck-eyebrow { display: block; margin-bottom: 8px; }
 .deck-study-cards { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }

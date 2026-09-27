@@ -105,6 +105,14 @@ deck-workspace-format:
 deck-workspace-smoke run_name mode="write":
     & "out/pyenv/Scripts/python.exe" scripts/deck_workspace_smoke.py {{run_name}} {{mode}}
 
+deck-selection-test:
+    $env:QT_QPA_PLATFORM="offscreen"; $env:PYTHONPATH="qt;pylib;out/qt;out/pylib"; & "out/pyenv/Scripts/pytest.exe" -p no:cacheprovider qt/tests/test_deck_selection.py
+
+deck-selection-format:
+    & "out/pyenv/Scripts/ruff.exe" check --select I --fix qt/aqt/deckbrowser.py qt/aqt/operations/__init__.py qt/aqt/builtin_features/learning/deck_page.py qt/tests/test_deck_selection.py scripts/deck_workspace_smoke.py
+    & "out/pyenv/Scripts/ruff.exe" format qt/aqt/deckbrowser.py qt/aqt/operations/__init__.py qt/aqt/builtin_features/learning/deck_page.py qt/tests/test_deck_selection.py scripts/deck_workspace_smoke.py
+    & "node_modules/.bin/dprint.cmd" fmt qt/aqt/data/web/js/deckbrowser.ts docs/DECK-WORKSPACE-LAYOUT.md
+
 desktop-tools-format:
     & "out/pyenv/Scripts/ruff.exe" check --select I --fix qt/aqt/builtin_features/desktop_tools qt/tests/test_desktop_tools.py scripts/desktop_tools_smoke.py
     & "out/pyenv/Scripts/ruff.exe" format qt/aqt/builtin_features/desktop_tools qt/tests/test_desktop_tools.py scripts/desktop_tools_smoke.py

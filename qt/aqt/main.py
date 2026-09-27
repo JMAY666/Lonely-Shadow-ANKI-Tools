@@ -1258,6 +1258,8 @@ title="{}" {}>{}</button>""".format(
         self.stateShortcuts = []
 
     def onStudyKey(self) -> None:
+        if self.state == "deckBrowser" and self.deckBrowser.selection_pending:
+            return
         if self.state == "overview":
             self.col.startTimebox()
             self.moveToState("review")
