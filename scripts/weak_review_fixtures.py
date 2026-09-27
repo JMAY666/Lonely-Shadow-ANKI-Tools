@@ -93,7 +93,9 @@ def enhanced_html(answer=False):
 <script>setTimeout(()=>{
  const content=document.getElementById('enhanced-cloze-content').innerHTML;
  const parts=[...content.matchAll(/\{\{c(\d+)::([\s\S]*?)\}\}/g)];
- window.enhancedClozesData={clozeId:parts.map(x=>x[1]),answers:parts.map(x=>x[2]),hints:parts.map(x=>'')};
+ // Protected Enhanced Cloze templates can initialize the same source twice.
+ const initialized=parts.concat(parts);
+ window.enhancedClozesData={clozeId:initialized.map(x=>x[1]),answers:initialized.map(x=>x[2]),hints:initialized.map(x=>'')};
  window.toggleCloze=function(el,side){const shown=side==='answer'||(side==='toggle'&&el.getAttribute('show-state')!=='answer');el.setAttribute('show-state',shown?'answer':'hint');el.innerHTML=shown?enhancedClozesData.answers[Number(el.getAttribute('index'))]:'[ ]'};
  window.rebuildTestClozes=()=>{
    let index=0;document.getElementById('enhanced-clozes').innerHTML=content.replace(/\{\{c(\d+)::([\s\S]*?)\}\}/g,(_,cid)=>'<span class="'+(cid==='1'?'genuine':'pseudo')+'-cloze" index="'+(index++)+'" cid="'+cid+'"></span>');

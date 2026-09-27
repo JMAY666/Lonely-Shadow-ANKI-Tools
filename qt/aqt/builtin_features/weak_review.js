@@ -415,16 +415,24 @@
         if (
             !parsed.length || parsed.length > 2048
             || !["clozeId", "answers", "hints"].every(key =>
-                Array.isArray(data[key]) && data[key].length === parsed.length
+                Array.isArray(data[key]) && data[key].length >= parsed.length
+                && data[key].length <= 16384 && data[key].length === data.clozeId.length
+                && data[key].length % parsed.length === 0
             )
         ) { return null; }
         if (
-            parsed.some((part, i) =>
+            parsed.some(part => !localTextIsReady(part[1]) || !localTextIsReady(part[2]))
+        ) { return null; }
+        // Some protected templates append the same parsed source again on redraw.
+        // Accept only complete, identical copies; native toggles still index the
+        // first copy. Keep canonical slot identities and leave template data intact.
+        for (let i = 0; i < data.clozeId.length; i++) {
+            const part = parsed[i % parsed.length];
+            if (
                 part[0] !== String(data.clozeId[i])
                 || part[1] !== data.answers[i] || part[2] !== data.hints[i]
-                || !localTextIsReady(part[1]) || !localTextIsReady(part[2])
-            )
-        ) { return null; }
+            ) { return null; }
+        }
         const expected = parsed.flatMap((part, i) => Number(part[0]) === config.ordinal ? [i] : []);
         const targets = [...root.querySelectorAll("span.genuine-cloze[index][cid]")];
         if (

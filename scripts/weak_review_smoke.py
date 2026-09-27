@@ -1361,6 +1361,13 @@ try:
                     ),
                 )
             else:
+                check(
+                    "enhanced repeated initialization keeps one mark per current slot",
+                    js(
+                        local.web,
+                        "enhancedClozesData.answers.length===18 && document.querySelectorAll('.anki-wr-mark').length===7",
+                    ),
+                )
                 js(local.web, "showTestCloze()")
                 wait(lambda: local_hidden() == count - 2)
                 check(
@@ -1376,6 +1383,31 @@ try:
                     "enhanced DOM rebuild retains individual identity without wrapper recursion",
                     local.weak_review.value["known"] == ["s0"],
                 )
+                for index in (0, 9):
+                    js(
+                        local.web,
+                        f"enhancedClozesData.answers[{index}]='不匹配的旧内容';rebuildTestClozes()",
+                    )
+                    wait(
+                        lambda: (
+                            not local.weak_review.manifest
+                            and js(
+                                local.web,
+                                "document.querySelectorAll('.anki-wr-mark').length",
+                            )
+                            == 0
+                        )
+                    )
+                    check(
+                        f"enhanced inconsistent initialization at {index} refuses stale marks",
+                        snapshot() == baseline,
+                    )
+                    show_question(local)
+                    wait(lambda: ready(local) and local_hidden() == count - 1)
+                    check(
+                        f"enhanced consistent reload after mismatch {index} restores marks",
+                        local.weak_review.value["known"] == ["s0"],
+                    )
             show_answer(local)
             wait(lambda: local_hidden() == 0)
             mark(local, 2)
