@@ -3,7 +3,7 @@
 import json
 
 
-def table_html():
+def table_html(ragged=False):
     # Inspected mu-aarea type=2 contract, with synthetic repeated cell answers.
     rows = [[{"text": text, "show": 0} for text in ("", "列一", "列二", "列三")]]
     for index in range(3):
@@ -14,6 +14,23 @@ def table_html():
                 for text in ("相同答案", "相同答案", "<b>格式</b><br>换行")
             ]
         )
+    if ragged:
+        rows = [
+            [{"text": "", "show": 0}, {"text": "合成列标题", "show": 0}],
+            *[
+                [
+                    {"text": f"合成行 {index + 1}", "show": 0},
+                    {"text": "相同答案", "show": 0},
+                ]
+                for index in range(6)
+            ],
+            [
+                {"text": "附加条目", "show": 0},
+                {"text": "相同答案", "show": 0},
+                {"text": "相同答案", "show": 0},
+                {"text": "<b>格式</b><br>换行", "show": 0},
+            ],
+        ]
     return """<html><style>
 body{font:18px sans-serif;margin:8px}table{width:100%;border-collapse:collapse}
 th{background:#afd0be}td,th{padding:12px;border:1px solid #ddd;text-align:left}

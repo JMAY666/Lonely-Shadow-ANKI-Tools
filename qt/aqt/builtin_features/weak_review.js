@@ -63,7 +63,8 @@
                     ).join("");
             } else if (data.adapter === "mumu-table-v1") {
                 const [r, c] = part[0], rows = data.identity[3];
-                context += `\n行：${plain(rows[r][0])}；列：${plain(rows[0][c])}；${marker}\n同一行：`
+                const column = plain(rows[0][c]) || `第 ${c + 1} 列`;
+                context += `\n行：${plain(rows[r][0])}；列：${column}；${marker}\n同一行：`
                     + rows[r].map((cell, col) => col === c ? marker : plain(cell)).join(" | ");
             } else if (data.adapter === "native-cloze-v1") {
                 const root = new DOMParser().parseFromString(config.question, "text/html");
@@ -656,15 +657,18 @@
         const { rich, rows } = matches[0];
         if (
             rows.length < 2 || rows.length > 513 || !Array.isArray(rows[0]) || rows[0].length < 2
-            || (rows.length - 1) * (rows[0].length - 1) > 512
             || rows.some(row =>
-                !Array.isArray(row) || row.length !== rows[0].length
+                !Array.isArray(row) || row.length < 1 || row.length > 513
                 || row.some(cell =>
                     !cell || !localTextIsReady(cell.text) || cell.text.length > 18000
                     || ![0, 1].includes(cell.show) || !inlineMarkup([cell.text])
                 )
             )
         ) { return null; }
+        // Some tables have extra answer cells beyond the heading row. Preserve
+        // their actual row/column positions and count only real answer cells.
+        const answerCount = rows.slice(1).reduce((count, row) => count + row.length - 1, 0);
+        if (answerCount < 1 || answerCount > 512) { return null; }
         const normalized = rows.map(row => row.map(cell => cell.text));
         if (JSON.stringify(normalized).length > 100000) { return null; }
         const tables = rich.querySelectorAll("table");
@@ -916,7 +920,7 @@
             subtree: true,
             childList: true,
             attributes: true,
-            attributeFilter: ["style", "src"],
+            attributeFilter: ["style", "src", "rowspan", "colspan"],
         });
     }
     function start(value) {

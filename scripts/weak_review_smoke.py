@@ -366,6 +366,7 @@ try:
         image_deck = col.decks.id("图片区域合成测试")
         text_deck = col.decks.id("网页文字填空合成测试")
         table_deck = col.decks.id("网页表格填空合成测试")
+        ragged_deck = col.decks.id("不等列表格填空合成测试")
         studio_deck = col.decks.id("灰色遮挡合成测试")
         enhanced_deck = col.decks.id("增强挖空合成测试")
         note = col.new_note(col.models.by_name("Cloze"))
@@ -405,6 +406,12 @@ try:
                 f'<iframe id="receiver" src="/_anki/weak-review-table-synthetic?{face}" style="width:100%;height:480px;border:0"></iframe>'
             )
         col.add_note(table_note, table_deck)
+        ragged_note = col.new_note(web_model)
+        for field, face in (("Front", "question"), ("Back", "answer")):
+            ragged_note[field] = (
+                f'<iframe id="receiver" src="/_anki/weak-review-ragged-synthetic?{face}" style="width:100%;height:580px;border:0"></iframe>'
+            )
+        col.add_note(ragged_note, ragged_deck)
         for target_deck, render in (
             (studio_deck, studio_html),
             (enhanced_deck, enhanced_html),
@@ -423,6 +430,7 @@ try:
             "native_id": native_id,
             "text_deck": text_deck,
             "table_deck": table_deck,
+            "ragged_deck": ragged_deck,
             "studio_deck": studio_deck,
             "enhanced_deck": enhanced_deck,
         }
@@ -487,6 +495,11 @@ try:
     )
     mediasrv.app.add_url_rule(
         "/_anki/weak-review-table-synthetic", "weak_review_table_synthetic", table_html
+    )
+    mediasrv.app.add_url_rule(
+        "/_anki/weak-review-ragged-synthetic",
+        "weak_review_ragged_synthetic",
+        lambda: table_html(ragged=True),
     )
     app = aqt._run(
         ["anki", "-b", str(BASE), "-p", "Recall-Test", "--safemode", "-l", "zh_CN"],
@@ -1114,7 +1127,7 @@ try:
         for kind, change in (
             ("formula", f"testRows[1][1].text={json.dumps(r'\(x^2\)')}"),
             ("media", "testRows[1][1].text='<img src=\"unsupported\">'"),
-            ("uneven rows", "testRows[1].pop()"),
+            ("empty row", "testRows[1]=[]"),
         ):
             frame_js(change + ";renderNative()")
             wait(lambda: "空格或图片" in image_reviewer.weak_review.status)
@@ -1144,6 +1157,161 @@ try:
             == len(before_table_marks[1]) + 1,
         )
         mw.grab().save(str(BASE / "table-question.png"))
+        right.deck.setCurrentIndex(right.deck.findData(expected["ragged_deck"]))
+        wait(lambda: not right.pending and ready(image_reviewer))
+        wait(lambda: table_hidden() == 9)
+        ragged_before = snapshot()
+        check(
+            "ragged table keeps all nine answers and original row lengths",
+            len(image_reviewer.weak_review.slots) == 9
+            and frame_js(
+                "JSON.stringify([...document.querySelector('.anki-wr-table-host table').rows].filter(r=>r.cells.length).map(r=>r.cells.length)) === JSON.stringify([2,2,2,2,2,2,2,4])"
+            ),
+        )
+        catalog = next(
+            item
+            for item in image_reviewer.weak_review.insights.catalogs()
+            if item["card"] == image_reviewer.card.id
+        )
+        check(
+            "extra columns retain row context and explicit column numbers",
+            "列：第 3 列" in catalog["slots"][7]["context"]
+            and "列：第 4 列" in catalog["slots"][8]["context"]
+            and "行：附加条目" in catalog["slots"][8]["context"],
+        )
+        # Same text in the first row and the extra columns must never share marks.
+        frame_js("document.querySelector('[data-wr-key=blank-s7]').click()")
+        wait(lambda: table_hidden() == 8)
+        check(
+            "extra-column reveal does not mark",
+            image_reviewer.weak_review.value["known"] == [],
+        )
+        frame_js("document.querySelector('[data-wr-key=s7]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s7"])
+        show_question(image_reviewer)
+        wait(lambda: table_hidden() == 8)
+        check(
+            "extra column remembers only its own repeated answer",
+            frame_js(
+                "document.querySelector('[data-wr-key=blank-s7]').dataset.wrConcealed==='false' && document.querySelector('[data-wr-key=blank-s0]').dataset.wrConcealed==='true' && document.querySelector('[data-wr-key=blank-s6]').dataset.wrConcealed==='true'"
+            ),
+        )
+        finish_revealing(image_reviewer, "ragged table", in_frame=True)
+        image_reviewer._showAnswer()
+        wait(lambda: ready(image_reviewer) and table_hidden() == 0)
+        frame_js("document.querySelector('[data-wr-key=s8]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s7", "s8"])
+        check(
+            "ragged answer side keeps formatting and headers outside marking",
+            frame_js(
+                "document.querySelectorAll('.anki-wr-table-host td b').length===1 && !document.querySelector('.anki-wr-table-host th .anki-wr-mark') && document.querySelectorAll('.anki-wr-mark:not(:disabled)').length===9"
+            ),
+        )
+        show_question(image_reviewer)
+        wait(lambda: table_hidden() == 7)
+        image_reviewer.weak_review.toggle_full(True)
+        wait(lambda: table_hidden() == 9)
+        image_reviewer.weak_review.toggle_full(False)
+        wait(lambda: table_hidden() == 7)
+        image_reviewer.weak_review.undo_mark()
+        wait(lambda: table_hidden() == 8)
+        image_reviewer.weak_review.reset()
+        wait(lambda: table_hidden() == 9)
+        image_reviewer.weak_review.undo_mark()
+        wait(lambda: table_hidden() == 8)
+        image_reviewer._showAnswer()
+        wait(lambda: ready(image_reviewer) and table_hidden() == 0)
+        frame_js("document.querySelector('[data-wr-key=s8]').click()")
+        wait(lambda: image_reviewer.weak_review.value["known"] == ["s7", "s8"])
+        show_question(image_reviewer)
+        wait(lambda: table_hidden() == 7)
+        frame_js("rebuildNative()")
+        wait(lambda: ready(image_reviewer) and table_hidden() == 7)
+        check(
+            "ragged table restores extra-column marks after a component rebuild",
+            frame_js(
+                "document.querySelectorAll('.anki-wr-table-host').length===1 && testRows.every(r=>r.every(c=>c.show===0))"
+            ),
+        )
+        image_reviewer.weak_review.toggle(False)
+        wait(lambda: frame_js("!document.querySelector('.anki-wr-table-host')"))
+        frame_js("[...document.querySelectorAll('.mumu-table td')][7].click()")
+        check(
+            "ragged disable restores native extra-column clicks",
+            frame_js("testRows[7][2].show===1 && testRows[7][3].show===0"),
+        )
+        image_reviewer.weak_review.toggle(True)
+        wait(lambda: ready(image_reviewer) and table_hidden() == 7)
+        old_request = image_reviewer.weak_review.request
+        frame_js("testRows[7].splice(2,0,{text:'新增空格',show:0});renderNative()")
+        wait(
+            lambda: (
+                ready(image_reviewer) and len(image_reviewer.weak_review.slots) == 10
+            )
+        )
+        image_reviewer.weak_review.receive(
+            json.dumps(
+                {
+                    "kind": "mark",
+                    "token": image_reviewer.weak_review.token,
+                    "request": old_request,
+                    "key": "s7",
+                    "known": True,
+                }
+            )
+        )
+        check(
+            "changed ragged row invalidates marks and stale clicks",
+            image_reviewer.weak_review.value["known"] == [],
+        )
+        show_question(image_reviewer)
+        wait(lambda: ready(image_reviewer) and table_hidden() == 7)
+        for label, change in (
+            (
+                "missing rendered cell",
+                "document.querySelector('.mumu-table td').remove()",
+            ),
+            (
+                "merged rendered cell",
+                "document.querySelector('.mumu-table td').colSpan=2",
+            ),
+            (
+                "too many actual answers",
+                "testRows.push(Array.from({length:505},()=>({text:'额外',show:0})));renderNative()",
+            ),
+        ):
+            frame_js(change)
+            wait(lambda: "空格或图片" in image_reviewer.weak_review.status)
+            check(
+                label + " safely restores the native ragged table",
+                frame_js(
+                    "!document.querySelector('.anki-wr-table-host') && document.querySelector('.mumu-table').style.display!=='none'"
+                ),
+            )
+            show_question(image_reviewer)
+            wait(lambda: ready(image_reviewer) and table_hidden() == 7)
+        check(
+            "ragged marks and controls leave scheduling unchanged",
+            snapshot() == ragged_before,
+        )
+        mw.grab().save(str(BASE / "ragged-question.png"))
+        image_reviewer._showAnswer()
+        wait(lambda: ready(image_reviewer) and table_hidden() == 0)
+        mw.grab().save(str(BASE / "ragged-answer.png"))
+        image_reviewer._answerCard(1)
+        wait(
+            lambda: (
+                ready(image_reviewer)
+                and image_reviewer.state == "question"
+                and table_hidden() == 7
+            )
+        )
+        check(
+            "ragged extra-column marks survive a real learning step",
+            image_reviewer.weak_review.value["known"] == ["s7", "s8"]
+            and mw.col.db.scalar("select count(*) from revlog")
+            == len(ragged_before[1]) + 1,
+        )
         for kind, target_deck, count in [
             ("studio", expected["studio_deck"], 6),
             ("enhanced", expected["enhanced_deck"], 7),
@@ -1371,6 +1539,24 @@ try:
         check(
             "fresh process restores table marks in single review",
             reviewer.weak_review.value["known"] == ["s0", "s2"],
+        )
+        mw.moveToState("deckBrowser")
+        mw.col.decks.select(expected["ragged_deck"])
+        mw.moveToState("review")
+        wait(lambda: ready(reviewer))
+        wait(
+            lambda: (
+                js(
+                    reviewer.web,
+                    "document.querySelectorAll('[data-wr-concealed=true]').length",
+                    in_frame=True,
+                )
+                == 7
+            )
+        )
+        check(
+            "fresh process restores ragged extra-column marks in single review",
+            reviewer.weak_review.value["known"] == ["s7", "s8"],
         )
 
         for kind, target_deck, count in [
