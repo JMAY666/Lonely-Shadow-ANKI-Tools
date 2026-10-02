@@ -479,7 +479,10 @@
             button.disabled = true;
             entry.el.after(button);
             cleanup.push(() => {
-                found.paint(entry.el, shown);
+                // A redraw has already replaced these nodes and may have reset
+                // the template's answer arrays. Never call its native toggle on
+                // a detached answer while cleaning up the previous card face.
+                if (entry.el.isConnected) { found.paint(entry.el, shown); }
                 delete entry.el.dataset.wrConcealed;
                 delete entry.el.dataset.wrKnown;
             });

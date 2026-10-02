@@ -90,13 +90,21 @@ def enhanced_html(answer=False):
         + r"""</span><div id="enhanced-clozes"></div>
 <div hidden><span class="cloze" data-cloze="hidden helper" data-ordinal="1">[...]</span></div>
 <button id="show-one-cloze-right" onclick="showTestCloze()">逐个显示</button>
-<script>setTimeout(()=>{
+<script>
+ // A reviewer redraw resets template data before its asynchronous initialization.
+ window.enhancedClozesData={clozeId:[],answers:[],hints:[]};
+ window.toggleCloze=function(el,side){
+   const shown=side==='answer'||(side==='toggle'&&el.getAttribute('show-state')!=='answer');
+   let answer=enhancedClozesData.answers[Number(el.getAttribute('index'))];
+   if(answer.startsWith('#'))answer=answer.slice(1);
+   el.setAttribute('show-state',shown?'answer':'hint');el.innerHTML=shown?answer:'[ ]';
+ };
+ setTimeout(()=>{
  const content=document.getElementById('enhanced-cloze-content').innerHTML;
  const parts=[...content.matchAll(/\{\{c(\d+)::([\s\S]*?)\}\}/g)];
  // Protected Enhanced Cloze templates can initialize the same source twice.
  const initialized=parts.concat(parts);
  window.enhancedClozesData={clozeId:initialized.map(x=>x[1]),answers:initialized.map(x=>x[2]),hints:initialized.map(x=>'')};
- window.toggleCloze=function(el,side){const shown=side==='answer'||(side==='toggle'&&el.getAttribute('show-state')!=='answer');el.setAttribute('show-state',shown?'answer':'hint');el.innerHTML=shown?enhancedClozesData.answers[Number(el.getAttribute('index'))]:'[ ]'};
  window.rebuildTestClozes=()=>{
    let index=0;document.getElementById('enhanced-clozes').innerHTML=content.replace(/\{\{c(\d+)::([\s\S]*?)\}\}/g,(_,cid)=>'<span class="'+(cid==='1'?'genuine':'pseudo')+'-cloze" index="'+(index++)+'" cid="'+cid+'"></span>');
    document.querySelectorAll('.genuine-cloze,.pseudo-cloze').forEach(el=>toggleCloze(el,ANSWER||el.classList.contains('pseudo-cloze')?'answer':'hint'));

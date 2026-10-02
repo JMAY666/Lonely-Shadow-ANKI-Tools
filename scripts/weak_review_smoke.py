@@ -282,6 +282,33 @@ def finish_revealing(reviewer, label, *, in_frame=False, next_action=None):
         )
         wait(lambda: evaluate("window.revealPaintReady===true"))
         mw.grab().save(str(BASE / f"auto-answer-{label}.png"))
+    if label == "enhanced":
+        mouse_click(reviewer, "[data-wr-key=s1]")
+        wait(lambda: reviewer.weak_review.value["known"] == sorted(known + ["s1"]))
+        wait(
+            lambda: js(
+                reviewer.bottom.web,
+                f"document.body.innerText.includes('本轮已记住 {len(known) + 1}/{len(reviewer.weak_review.slots)}')"
+                " && document.body.innerText.includes('再练未掌握')",
+            )
+        )
+        check(
+            "enhanced all-revealed answers still support mouse marks and round scoring",
+            snapshot() == baseline,
+        )
+        reviewer.weak_review.undo_mark()
+        wait(lambda: reviewer.weak_review.value["known"] == known)
+        mouse_move(reviewer, "[data-wr-key=s1]", owner=True)
+        wait(
+            lambda: evaluate(
+                "document.querySelector('[data-wr-key=s1]').matches(':popover-open')"
+            )
+        )
+        check(
+            "enhanced answer-side undo preserves marks and the hover control",
+            snapshot() == baseline,
+        )
+        mw.grab().save(str(BASE / "enhanced-all-revealed.png"))
     show_question(reviewer)
     wait(lambda: concealed() == keys)
     check(label + " question redraw does not auto-flip", reviewer.state == "question")
